@@ -5,7 +5,8 @@ expose template_list, general operators
 
 import bpy
 import numpy as np
-from typing import Any, Literal, Sequence, Type, Union
+import argparse
+from typing import Any, Literal, Sequence, Union
 
 # from .lib import get_scale
 
@@ -41,17 +42,33 @@ BL_REGION_TYPE = "UI"
 BL_CATEGORY = "Development"
 MIN_RATIO = 0.03
 MOCK_DATA = [
-    {"text": "00:00", "BOOL": False, "FLOAT": 0.0},
-    {"text": "00:01", "BOOL": True, "FLOAT": 1.0},
-    {"text": "01:00", "BOOL": True, "FLOAT": 2.0},
-    {"text": "01:23", "BOOL": True, "FLOAT": 3.0},
+    {"text": "00:00", "SELECTED": False, "FLOAT": 0.0},
+    {"text": "00:01", "SELECTED": True, "FLOAT": 1.0},
+    {"text": "01:00", "SELECTED": True, "FLOAT": 2.0},
+    {"text": "01:23", "SELECTED": True, "FLOAT": 3.0},
 ]
 
 
+class PropertyList(list):
+    def add(self) -> argparse.Namespace: ...
+
+
 class Global:
+    _data = PropertyList()
+
     @property
     def table(self) -> "TableData":
         return bpy.context.scene.bpy_table  # type:ignore
+
+    @property
+    def data(self) -> PropertyList:
+        if not self._data:
+            self._data = self.table.data
+        return self._data  # type: ignore
+
+    @data.setter
+    def data(self, value: type[bpy.types.PropertyGroup]):
+        self._data = value  # type: ignore
 
 
 G = Global()
@@ -70,10 +87,10 @@ class StaticData(bpy.types.PropertyGroup):
     """Your custom data struct"""
 
     ID: bpy.props.IntProperty()  # type:ignore
+    SELECTED: bpy.props.BoolProperty()  # type:ignore
     text: bpy.props.StringProperty(
         # update=update_text, options={"TEXTEDIT_UPDATE"}
     )  # type: ignore
-    BOOL: bpy.props.BoolProperty()  # type:ignore
     FLOAT: bpy.props.FloatProperty()  # type:ignore
     V_INT: bpy.props.IntVectorProperty()  # type:ignore
     V_FLOAT: bpy.props.FloatVectorProperty()  # type:ignore
@@ -82,6 +99,11 @@ class StaticData(bpy.types.PropertyGroup):
     @classmethod
     def len(cls):
         return len(cls.__annotations__)
+
+
+def unreg(cls: type[bpy.types.PropertyGroup], name: str):
+    delattr(bpy.types.Scene, name)
+    bpy.utils.unregister_class(cls)
 
 
 def genPropertyGroup(
@@ -102,8 +124,10 @@ def genPropertyGroup(
 
     Returns
     -------
+    class_instance:
+        instance of the dynamically created class, contains ID(IntProperty) field.
     class:
-        the dynamically created class, contains ID(IntProperty) field.
+        the dynamically created class
     unregister:
         function to unregister the class
     """
@@ -111,6 +135,7 @@ def genPropertyGroup(
         raise ValueError(f"Invalid class name: {name}")
     # 确保 ID 字段存在
     fields.setdefault("ID", bpy.props.IntProperty())  # type: ignore
+    fields.setdefault("SELECTED", bpy.props.BoolProperty())  # type: ignore
     # 创建类属性字典
     if not fields:
         fields = guess_fields(data)
@@ -118,14 +143,14 @@ def genPropertyGroup(
     # 动态创建类
     cls = type(name, (bpy.types.PropertyGroup,), attrs)
     bpy.utils.register_class(cls)
-    setattr(bpy.types.Scene, name, bpy.props.PointerProperty(type=cls))
+    setattr(bpy.types.Scene, name, bpy.props.CollectionProperty(type=cls))
 
     def unregister():
-        delattr(bpy.types.Scene, name)
-        bpy.utils.unregister_class(cls)
+        unreg(cls, name)
 
     class_data.append(cls)
-    return cls, unregister
+    instance = getattr(bpy.types.Scene, name)
+    return instance, cls, unregister
 
 
 def guess_fields(data: DATA_TYPE):
@@ -213,10 +238,30 @@ class TableData(bpy.types.PropertyGroup):
         return sorted(data, key=lambda x: x.get(sort_col, ""), reverse=reverse)
 
 
+def _perform_import(data: DATA_TYPE):
+    """实际执行导入数据的函数"""
+    for idx, row in enumerate(data):
+        New = G.data.add()
+        New.ID = idx
+        if isinstance(row, dict):
+            for k, v in row.items():
+                if hasattr(New, k):
+                    setattr(New, k, v)
+        elif isinstance(row, Sequence):
+            for i, v in enumerate(row):
+                if hasattr(New, f"{i}"):
+                    setattr(New, f"{i}", v)
+    if len(G.data) > 0:
+        for idx in range(len(G.data[0].keys())):
+            Col: ColumnSettings = G.table.cols.add()
+        Col.split = 1  # the last has remaining space
+    print(f"imported {len(G.data)} rows, {len(G.table.cols)} cols")
+
+
 def Import(
     data: DATA_TYPE,
     act: Literal["add", "refresh", "once"] = "add",
-    Class: Type[bpy.types.PropertyGroup] | str = StaticData,
+    Class: type[bpy.types.PropertyGroup] | str = StaticData,
     fields: dict[str, bpy_props_Property] = {},
 ):
     """import data into table UI list
@@ -238,38 +283,35 @@ def Import(
         if Class is str, can provide fields to define the dynamic class.
         if not provided, will try to infer from data.
     """
-    if act == "once" and len(G.table.data) > 0:
+    if act == "once" and len(G.data) > 0:
         return
     if act == "refresh":
         G.table.cols.clear()
-        G.table.data.clear()
+        G.data.clear()
+        unreg(StaticData, "bpy_table")
     if isinstance(data, np.ndarray):
         ...  # TODO
     else:
         if isinstance(Class, str):
-            cls, unregister = genPropertyGroup(name=Class, fields=fields, data=data)
-            G.table.data = cls
-        for idx, row in enumerate(data):
-            New = G.table.data.add()
-            New.ID = idx
-            if isinstance(row, dict):
-                for k, v in row.items():
-                    if hasattr(New, k):
-                        setattr(New, k, v)
-            elif isinstance(row, Sequence):
-                for i, v in enumerate(row):
-                    if hasattr(New, f"{i}"):
-                        setattr(New, f"{i}", v)
-    if len(G.table.data) > 0:
-        for idx in range(len(G.table.data[0].keys())):
-            Col: ColumnSettings = G.table.cols.add()
-        Col.split = 1  # the last has remaining space
-    print(f"imported {len(G.table.data)} rows, {len(G.table.cols)} cols")
+            instance, _, _ = genPropertyGroup(name=Class, fields=fields, data=data)
+            G.data = instance  # TODO: AttributeError: '_PropertyDeferred' object has no attribute 'add'
+            print("😭")
+
+    def delayed_import():
+        """检查对象是否已正确初始化"""
+        if hasattr(G.data, "add"):
+            _perform_import(data)
+            return None  # 返回None表示定时器不需要重复执行
+        else:
+            print("Waiting for G.data to be ready...")
+            return 0.1  # 100ms后再次检查
+
+    bpy.app.timers.register(delayed_import, first_interval=0.01)
 
 
 def export() -> list[dict[str, Any]]:
     """export data from table UI list"""
-    res = [{k: v for k, v in item.items()} for item in G.table.data]
+    res = [{k: v for k, v in item.items()} for item in G.data]
     print(res)
     return res
 
@@ -285,19 +327,21 @@ class Table(bpy.types.UIList):
         active_data,
         active_propname,
     ):
-        if not G.table.data:
+        if not G.data:
             return
-        propNames: list[str] = list(G.table.data[0].keys())
+        propNames: list[str] = list(G.data[0].keys())
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             factor = G.table.cols[0].split
             split = layout.split(factor=factor, align=True)
             remain = 1 - factor
-            split.prop(item, propNames[0], text="", emboss=False, icon_value=icon)
-            for idx, property in enumerate(propNames[1:], start=1):
+            is_bool = isinstance(getattr(item, propNames[0]), bool)
+            split.prop(item, propNames[0], text="", emboss=is_bool, icon_value=icon)
+            for idx, prop in enumerate(propNames[1:], start=1):
                 factor = _get_factor(G.table.cols[idx], remain)
                 remain = 1 - factor
                 split = split.split(factor=factor, align=True)
-                split.prop(item, property, text="", emboss=False, icon_value=icon)
+                is_bool = isinstance(getattr(item, prop), bool)
+                split.prop(item, prop, text="", emboss=is_bool, icon_value=icon)
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon_value=icon)
@@ -308,10 +352,10 @@ class TablePanel(bpy.types.Panel, Panel):
         layout: bpy.types.UILayout = self.layout  # type: ignore
         scene: bpy.types.Scene = context.scene  # type: ignore
         table = scene.bpy_table  # type: ignore
-        if not (G.table.cols and G.table.data):
+        if not (G.table.cols and G.data):
             return
 
-        propNames: list[str] = list(G.table.data[0].keys())
+        propNames: list[str] = list(G.data[0].keys())
         COLS = G.table.cols
         row = layout.row(align=True)
         split = row.split(factor=COLS[0].split, align=True)
@@ -353,7 +397,7 @@ class ImportOperator(bpy.types.Operator):
     bl_options = {"REGISTER"}
 
     def execute(self, context):
-        Import(MOCK_DATA, act="refresh")
+        Import(MOCK_DATA, act="refresh", Class="DynamicData")
         return {"FINISHED"}
 
 
@@ -390,4 +434,3 @@ def unregister():
 
 if __name__ == "__main__":
     register()
-    Import(MOCK_DATA, act="refresh")
