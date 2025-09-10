@@ -5,9 +5,34 @@ expose template_list, general operators
 
 import bpy
 import numpy as np
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence, Type, Union
 
 # from .lib import get_scale
+
+bpy_props_Property = Union[
+    type(bpy.props.BoolProperty),
+    type(bpy.props.BoolVectorProperty),
+    type(bpy.props.IntProperty),
+    type(bpy.props.IntVectorProperty),
+    type(bpy.props.FloatProperty),
+    type(bpy.props.FloatVectorProperty),
+    type(bpy.props.StringProperty),
+    type(bpy.props.EnumProperty),
+    type(bpy.props.PointerProperty),
+    type(bpy.props.CollectionProperty),
+]
+PY_TO_PROP = {
+    Sequence[bool]: bpy.props.BoolVectorProperty,
+    Sequence[int]: bpy.props.IntVectorProperty,
+    Sequence[float]: bpy.props.FloatVectorProperty,
+    bool: bpy.props.BoolProperty,
+    int: bpy.props.IntProperty,
+    float: bpy.props.FloatProperty,
+    str: bpy.props.StringProperty,
+    # enum: bpy.props.EnumProperty,
+    # object: bpy.props.PointerProperty,
+}
+DATA_TYPE = np.ndarray | Sequence[Sequence | dict]
 
 BL_LABEL = "Table"
 BL_IDNAME = "table_sheet"
@@ -16,10 +41,10 @@ BL_REGION_TYPE = "UI"
 BL_CATEGORY = "Development"
 MIN_RATIO = 0.03
 MOCK_DATA = [
-    {"id": "001", "start_time": "10:00", "end_time": "10:30", "text": "Hello"},
-    {"id": "002", "start_time": "11:30", "end_time": "12:00", "text": "World"},
-    {"id": "003", "start_time": "12:15", "end_time": "13:00", "text": "Blender"},
-    {"id": "004", "start_time": "09:00", "end_time": "09:45", "text": "AI"},
+    {"text": "00:00", "BOOL": False, "FLOAT": 0.0},
+    {"text": "00:01", "BOOL": True, "FLOAT": 1.0},
+    {"text": "01:00", "BOOL": True, "FLOAT": 2.0},
+    {"text": "01:23", "BOOL": True, "FLOAT": 3.0},
 ]
 
 
@@ -48,9 +73,6 @@ class StaticData(bpy.types.PropertyGroup):
     text: bpy.props.StringProperty(
         # update=update_text, options={"TEXTEDIT_UPDATE"}
     )  # type: ignore
-    text2: bpy.props.StringProperty(
-        # update=update_text, options={"TEXTEDIT_UPDATE"}
-    )  # type: ignore
     BOOL: bpy.props.BoolProperty()  # type:ignore
     FLOAT: bpy.props.FloatProperty()  # type:ignore
     V_INT: bpy.props.IntVectorProperty()  # type:ignore
@@ -60,6 +82,86 @@ class StaticData(bpy.types.PropertyGroup):
     @classmethod
     def len(cls):
         return len(cls.__annotations__)
+
+
+def genPropertyGroup(
+    name: str, fields: dict[str, bpy_props_Property] = {}, data: DATA_TYPE = []
+):
+    """
+    动态创建一个继承自 bpy.types.PropertyGroup 的类，一定包含 ID 字段，并注册到 bpy.types.Scene.{name} 上。
+
+    Args
+    ----
+    name:
+        class name, python varname style.
+    fields:
+        can use partial with args.
+    data:
+        optional, if provided, will infer fields from data keys and values.
+
+
+    Returns
+    -------
+    class:
+        the dynamically created class, contains ID(IntProperty) field.
+    unregister:
+        function to unregister the class
+    """
+    if not name.isidentifier():
+        raise ValueError(f"Invalid class name: {name}")
+    # 确保 ID 字段存在
+    fields.setdefault("ID", bpy.props.IntProperty())  # type: ignore
+    # 创建类属性字典
+    if not fields:
+        fields = guess_fields(data)
+    attrs = {"__annotations__": fields}
+    # 动态创建类
+    cls = type(name, (bpy.types.PropertyGroup,), attrs)
+    bpy.utils.register_class(cls)
+    setattr(bpy.types.Scene, name, bpy.props.PointerProperty(type=cls))
+
+    def unregister():
+        delattr(bpy.types.Scene, name)
+        bpy.utils.unregister_class(cls)
+
+    class_data.append(cls)
+    return cls, unregister
+
+
+def guess_fields(data: DATA_TYPE):
+    fields: dict[str, bpy_props_Property] = {}
+    failed = []
+    row = get_row(data)
+    if not row:
+        return fields
+    if isinstance(data, np.ndarray):
+        ...  # TODO
+    elif isinstance(row, dict):
+        for k, v in row.items():
+            prop = PY_TO_PROP.get(type(v))
+            if prop:
+                fields[k] = prop()
+            else:
+                failed.append((k, v))
+    elif isinstance(row, Sequence):
+        for idx, v in enumerate(row):
+            prop = PY_TO_PROP.get(type(v))
+            if prop:
+                fields[f"{idx}"] = prop()
+            else:
+                failed.append((idx, v))
+    if failed:
+        print(f"❌ Failed to infer fields for: {failed}")
+    return fields
+
+
+def get_row(data: DATA_TYPE) -> np.ndarray | Sequence | dict | None:
+    try:
+        if data and len(data) > 0:
+            return data[0]
+        return data
+    except TypeError:
+        return data
 
 
 class ColumnSettings(bpy.types.PropertyGroup):
@@ -112,10 +214,30 @@ class TableData(bpy.types.PropertyGroup):
 
 
 def Import(
-    data: np.ndarray | Sequence[Sequence | dict],
+    data: DATA_TYPE,
     act: Literal["add", "refresh", "once"] = "add",
+    Class: Type[bpy.types.PropertyGroup] | str = StaticData,
+    fields: dict[str, bpy_props_Property] = {},
 ):
-    """import data into table UI list"""
+    """import data into table UI list
+
+    Args
+    ----
+    data: np.ndarray | Sequence[Sequence | dict]
+        data to import
+    act:
+        "add": add data to existing data
+
+        "refresh": clear existing data and add new data
+
+        "once": only import if no existing data
+    Class:
+        custom dataclass for typing constrain and static code analysis.
+        if str, will construct dynamic PropertyGroup class, named `Class` that you give.
+    fields:
+        if Class is str, can provide fields to define the dynamic class.
+        if not provided, will try to infer from data.
+    """
     if act == "once" and len(G.table.data) > 0:
         return
     if act == "refresh":
@@ -124,12 +246,20 @@ def Import(
     if isinstance(data, np.ndarray):
         ...  # TODO
     else:
+        if isinstance(Class, str):
+            cls, unregister = genPropertyGroup(name=Class, fields=fields, data=data)
+            G.table.data = cls
         for idx, row in enumerate(data):
-            New: StaticData = G.table.data.add()
+            New = G.table.data.add()
             New.ID = idx
             if isinstance(row, dict):
-                New.text = row.get("start_time", "")
-                New.text2 = row.get("text", "")
+                for k, v in row.items():
+                    if hasattr(New, k):
+                        setattr(New, k, v)
+            elif isinstance(row, Sequence):
+                for i, v in enumerate(row):
+                    if hasattr(New, f"{i}"):
+                        setattr(New, f"{i}", v)
     if len(G.table.data) > 0:
         for idx in range(len(G.table.data[0].keys())):
             Col: ColumnSettings = G.table.cols.add()
@@ -137,7 +267,7 @@ def Import(
     print(f"imported {len(G.table.data)} rows, {len(G.table.cols)} cols")
 
 
-def export() -> list[dict[str, str | int | float]]:
+def export() -> list[dict[str, Any]]:
     """export data from table UI list"""
     res = [{k: v for k, v in item.items()} for item in G.table.data]
     print(res)
