@@ -7,12 +7,14 @@ import bpy
 import numpy as np
 from typing import Literal, Sequence
 
+# from .lib import get_scale
 
 BL_LABEL = "Table"
 BL_IDNAME = "table_sheet"
 BL_SPACE_TYPE = "VIEW_3D"
 BL_REGION_TYPE = "UI"
 BL_CATEGORY = "Development"
+MIN_RATIO = 0.03
 MOCK_DATA = [
     {"id": "001", "start_time": "10:00", "end_time": "10:30", "text": "Hello"},
     {"id": "002", "start_time": "11:30", "end_time": "12:00", "text": "World"},
@@ -65,8 +67,10 @@ class ColumnSettings(bpy.types.PropertyGroup):
         name="Column Width",
         description="列宽",
         default=0.3,
-        min=0.05,
-        max=0.95,
+        min=0,
+        max=1,
+        soft_min=MIN_RATIO,
+        soft_max=1 - MIN_RATIO,
         step=1,
         subtype="FACTOR",
     )  # type:ignore
@@ -129,6 +133,7 @@ def Import(
     if len(G.table.data) > 0:
         for idx in range(len(G.table.data[0].keys())):
             Col: ColumnSettings = G.table.cols.add()
+        Col.split = 1  # the last has remaining space
     print(f"imported {len(G.table.data)} rows, {len(G.table.cols)} cols")
 
 
@@ -154,10 +159,13 @@ class Table(bpy.types.UIList):
             return
         propNames: list[str] = list(G.table.data[0].keys())
         if self.layout_type in {"DEFAULT", "COMPACT"}:
-            split = layout.split(factor=G.table.cols[0].split, align=True)
+            factor = G.table.cols[0].split
+            split = layout.split(factor=factor, align=True)
+            remain = 1 - factor
             split.prop(item, propNames[0], text="", emboss=False, icon_value=icon)
             for idx, property in enumerate(propNames[1:], start=1):
-                factor = G.table.cols[idx].split
+                factor = _get_factor(G.table.cols[idx], remain)
+                remain = 1 - factor
                 split = split.split(factor=factor, align=True)
                 split.prop(item, property, text="", emboss=False, icon_value=icon)
         elif self.layout_type == "GRID":
@@ -170,32 +178,43 @@ class TablePanel(bpy.types.Panel, Panel):
         layout: bpy.types.UILayout = self.layout  # type: ignore
         scene: bpy.types.Scene = context.scene  # type: ignore
         table = scene.bpy_table  # type: ignore
-
-        cols: list[str] = list(G.table.data[0].keys())
-        row = layout.row(align=True)
-
         if not (G.table.cols and G.table.data):
             return
 
-        print("😄", len(G.table.cols) - 2)
-        split = row.split(factor=G.table.cols[0].split, align=True)
+        propNames: list[str] = list(G.table.data[0].keys())
+        COLS = G.table.cols
+        row = layout.row(align=True)
+        split = row.split(factor=COLS[0].split, align=True)
+        remain = 1 - COLS[0].split
         col = split.column(align=True)
-        col.prop(G.table.cols[0], "split", text="", emboss=True)
-        col.prop(G.table.cols[0], "selected", text=cols[0])
-        for idx, data in enumerate(G.table.cols[1:], start=1):
+        col.prop(COLS[0], "split", text="", emboss=False)
+        col.prop(COLS[0], "selected", text=propNames[0])
+        for idx, data in enumerate(COLS[1:], start=1):
             # if not at the end of cols, split:
-            is_not_last = idx == (len(G.table.cols) - 2)
-            print(idx)
-            if is_not_last:
-                split = split.split(factor=data.split, align=True)  # TODO
+            is_last = idx == (len(COLS) - 1)
+            if not is_last:
+                factor = _get_factor(data, remain)
+                remain = 1 - factor
+                split = split.split(factor=factor, align=True)
+
             col = split.column(align=True)
-            col.prop(data, "split", text="", emboss=True)
-            col.prop(G.table.cols[idx], "selected", text=cols[idx])
+            if is_last:
+                col.label(text=f"{data.split}")
+            else:
+                col.prop(data, "split", text="", emboss=False)
+            col.prop(COLS[idx], "selected", text=propNames[idx])
+            # col.prop_search(
+            #     COLS[idx], "selected_object_name", bpy.data, "objects", text="Object"
+            # )
 
         row = layout.row(align=True)
         row.template_list(
             "Table", "", table, "data", table, "index"  # type:ignore
         )
+
+
+def _get_factor(data, remain):
+    return min(1 - MIN_RATIO, max(MIN_RATIO, data.split / remain))
 
 
 class ImportOperator(bpy.types.Operator):
