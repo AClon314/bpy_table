@@ -9,12 +9,23 @@ import argparse
 import logging
 from typing import Any, Callable, Literal, Sequence, Union
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(levelname)s %(asctime)s %(filename)s:%(lineno)d\t%(message)s",
-    datefmt="%H:%M:%S",
-)
-Log = logging.getLogger(__name__)
+
+def getLogger(name=__name__):
+    _log_handler = logging.StreamHandler()
+    _log_handler.setLevel(logging.DEBUG)
+    _log_handler.setFormatter(
+        logging.Formatter(
+            "%(levelname)s %(asctime)s %(filename)s:%(lineno)d\t%(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    Log = logging.getLogger(name)
+    Log.handlers.clear()
+    Log.addHandler(_log_handler)  # bpy hijack the logging output
+    return Log
+
+
+Log = getLogger(__name__)
 
 bpy_props_Property = Union[
     type(bpy.props.BoolProperty),
@@ -51,10 +62,10 @@ ACTIVE_DATACLASS = "StaticData"
 TIMER = 0
 TIMEOUT = 3
 MOCK_DATA = [
-    {"text": "00:00", "SELECTED": False, "FLOAT": 0.0},
-    {"text": "00:01", "SELECTED": True, "FLOAT": 1.0},
-    {"text": "01:00", "SELECTED": True, "FLOAT": 2.0},
-    {"text": "01:23", "SELECTED": True, "FLOAT": 3.0},
+    {"text": "00:00", "FLOAT": 0.0},
+    {"text": "00:01", "FLOAT": 1.0},
+    {"text": "01:00", "FLOAT": 2.0},
+    {"text": "01:23", "FLOAT": 3.0},
 ]
 
 
@@ -148,6 +159,7 @@ def _genPropertyGroup(
     fields.setdefault("ID_", bpy.props.IntProperty())  # type: ignore
     fields.setdefault("SELECTED_", bpy.props.BoolProperty())  # type: ignore
     attrs = {"__annotations__": fields}
+    Log.debug(f"{attrs=}")
     # 动态创建类
     cls = type(name, (bpy.types.PropertyGroup,), attrs)
     bpy.utils.register_class(cls)
@@ -205,7 +217,9 @@ def _pyObj_fill_bpyProp(data: DATA_TYPE):
     """实际执行导入数据的函数"""
     for idx, row in enumerate(data):
         New = G.data.add()
+        # TODO: setdefault value here!!!
         New.ID_ = idx
+        New.SELECTED_ = False
         if isinstance(row, dict):
             for k, v in row.items():
                 if hasattr(New, k):
@@ -234,7 +248,10 @@ class ColumnEntity(bpy.types.PropertyGroup):
         subtype="FACTOR",
     )  # type:ignore
     selected: bpy.props.BoolProperty(
-        name="Selected", description="选择该列进行排序", default=False
+        name="Selected", description="选择该列进行排序"
+    )  # type:ignore
+    filter: bpy.props.StringProperty(
+        name="Filter", description="过滤该列内容"
     )  # type:ignore
 
 
@@ -323,8 +340,13 @@ def export() -> list[dict[str, Any]]:
     return res
 
 
-def _draw_prop(split: bpy.types.UILayout, data, property: str, text="", **kwargs):
-    is_bool = isinstance(getattr(data, property), bool)
+def _draw_prop(
+    split: bpy.types.UILayout, data: DATA_TYPE, property: str, text="", **kwargs
+):
+    try:
+        is_bool = isinstance(getattr(data, property), bool)
+    except AttributeError:
+        is_bool = False
     split.prop(data, property, text=text, emboss=is_bool, **kwargs)
 
 
@@ -371,9 +393,7 @@ class TablePanel(bpy.types.Panel, Panel):
         COLS = G.table.cols
         remain = 1 - COLS[0].split
         split = row.split(factor=COLS[0].split, align=True)
-        col = split.column(align=True)
-        col.prop(COLS[0], "split", text="", emboss=False)
-        col.prop(COLS[0], "selected", text=propNames[0])
+        _colHead(split, propNames, COLS, 0)
         for idx, data in enumerate(COLS[1:], start=1):
             # if not at the end of cols, split:
             is_last = idx == (len(COLS) - 1)
@@ -382,19 +402,25 @@ class TablePanel(bpy.types.Panel, Panel):
                 remain = 1 - factor
                 split = split.split(factor=factor, align=True)
 
-            col = split.column(align=True)
-            if is_last:
-                col.label(text=f"{data.split}")
-            else:
-                col.prop(data, "split", text="", emboss=False)
-            col.prop(COLS[idx], "selected", text=propNames[idx])
-            # TODO: 添加列筛选功能
-            # col.prop_search(
-            #     COLS[idx], "selected_object_name", bpy.data, "objects", text="Object"
-            # )
-
+            _colHead(split, propNames, COLS, idx)
         row = layout.row(align=True)
         row.template_list("Table", "", scene, ACTIVE_DATACLASS, G.table, "index")
+
+
+def _colHead(split: bpy.types.UILayout, propNames: list[str], COLS, idx: int, **kwargs):
+    col = split.column(align=True)
+    col.prop(COLS[idx], "split", text="", emboss=False)
+    col.prop(COLS[idx], "selected", text=propNames[idx])
+    col.prop_search(
+        COLS[idx],
+        "filter",
+        bpy.context.scene,
+        ACTIVE_DATACLASS,
+        text="",
+        icon="FILTER",  # TODO: 'NONE' but still show icon, upstream bug.
+        results_are_suggestions=True,
+        **kwargs,
+    )
 
 
 class ImportOperator(bpy.types.Operator):
