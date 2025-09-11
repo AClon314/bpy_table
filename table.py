@@ -336,6 +336,15 @@ def export() -> list[dict[str, Any]]:
     return res
 
 
+def _draw_prop(split: bpy.types.UILayout, data, property: str, text="", **kwargs):
+    is_bool = isinstance(getattr(data, property), bool)
+    split.prop(data, property, text=text, emboss=is_bool, **kwargs)
+
+
+def _get_factor(data, remain):
+    return min(1 - MIN_RATIO, max(MIN_RATIO, data.split / remain))
+
+
 class Table(bpy.types.UIList):
     def draw_item(
         self,
@@ -350,16 +359,15 @@ class Table(bpy.types.UIList):
         propNames: list[str] = list(G.data[0].keys())
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             factor = G.table.cols[0].split
-            split = layout.split(factor=factor, align=True)
             remain = 1 - factor
-            is_bool = isinstance(getattr(item, propNames[0]), bool)
-            split.prop(item, propNames[0], text="", emboss=is_bool, icon_value=icon)
+            split = layout.split(factor=factor, align=True)
+            # 绘制第一列
+            _draw_prop(split, item, propNames[0])
             for idx, prop in enumerate(propNames[1:], start=1):
                 factor = _get_factor(G.table.cols[idx], remain)
                 remain = 1 - factor
                 split = split.split(factor=factor, align=True)
-                is_bool = isinstance(getattr(item, prop), bool)
-                split.prop(item, prop, text="", emboss=is_bool, icon_value=icon)
+                _draw_prop(split, item, prop)
         elif self.layout_type == "GRID":
             layout.alignment = "CENTER"
             layout.label(text="", icon_value=icon)
@@ -371,11 +379,11 @@ class TablePanel(bpy.types.Panel, Panel):
         scene: bpy.types.Scene = context.scene  # type: ignore
         if not (hasattr(G, "table") and hasattr(G, "data") and G.table and G.data):
             return
+        row = layout.row(align=True)
         propNames: list[str] = list(G.data[0].keys())
         COLS = G.table.cols
-        row = layout.row(align=True)
-        split = row.split(factor=COLS[0].split, align=True)
         remain = 1 - COLS[0].split
+        split = row.split(factor=COLS[0].split, align=True)
         col = split.column(align=True)
         col.prop(COLS[0], "split", text="", emboss=False)
         col.prop(COLS[0], "selected", text=propNames[0])
@@ -399,10 +407,6 @@ class TablePanel(bpy.types.Panel, Panel):
 
         row = layout.row(align=True)
         row.template_list("Table", "", scene, ACTIVE_DATACLASS, G.table, "index")
-
-
-def _get_factor(data, remain):
-    return min(1 - MIN_RATIO, max(MIN_RATIO, data.split / remain))
 
 
 class ImportOperator(bpy.types.Operator):
