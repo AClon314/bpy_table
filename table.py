@@ -3,13 +3,18 @@ UI list(template_list)
 expose template_list, general operators
 """
 
-from functools import partial
 import bpy
 import numpy as np
 import argparse
+import logging
 from typing import Any, Callable, Literal, Sequence, Union
 
-# from .lib import get_scale
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(levelname)s %(asctime)s %(filename)s:%(lineno)d\t%(message)s",
+    datefmt="%H:%M:%S",
+)
+Log = logging.getLogger(__name__)
 
 bpy_props_Property = Union[
     type(bpy.props.BoolProperty),
@@ -90,8 +95,8 @@ class Panel:
 class StaticData(bpy.types.PropertyGroup):
     """Your custom data struct"""
 
-    ID: bpy.props.IntProperty()  # type:ignore
-    SELECTED: bpy.props.BoolProperty()  # type:ignore
+    ID_: bpy.props.IntProperty()  # type:ignore
+    SELECTED_: bpy.props.BoolProperty()  # type:ignore
     text: bpy.props.StringProperty(
         # update=update_text, options={"TEXTEDIT_UPDATE"}
     )  # type: ignore
@@ -114,7 +119,9 @@ def genPropertyGroup(
     name: str, fields: dict[str, bpy_props_Property] = {}, data: DATA_TYPE = []
 ):
     """
-    动态创建一个继承自 bpy.types.PropertyGroup 的类，一定包含 ID 字段，并注册到 bpy.types.Scene.{name} 上。
+    动态创建一个继承自 bpy.types.PropertyGroup 的类，一定包含 ID_ & SELECTED_ 字段，并注册到 bpy.types.Scene.{name} 上。
+
+    TODO: 存储动态类的列名，以便在启动时读取、恢复
 
     Args
     ----
@@ -135,12 +142,10 @@ def genPropertyGroup(
     """
     if not name.isidentifier():
         raise ValueError(f"Invalid class name: {name}")
-    # 确保 ID 字段存在
-    fields.setdefault("ID", bpy.props.IntProperty())  # type: ignore
-    fields.setdefault("SELECTED", bpy.props.BoolProperty())  # type: ignore
-    # 创建类属性字典
     if not fields:
         fields = pyObj_as_bpyProp(data)
+    fields.setdefault("ID_", bpy.props.IntProperty())  # type: ignore
+    fields.setdefault("SELECTED_", bpy.props.BoolProperty())  # type: ignore
     attrs = {"__annotations__": fields}
     # 动态创建类
     cls = type(name, (bpy.types.PropertyGroup,), attrs)
@@ -150,7 +155,8 @@ def genPropertyGroup(
     def unregister():
         unreg(cls, name)
 
-    class_data.append(cls)
+    # CLASS_DATA.append(cls)
+    UNREG.append(unregister)
     global ACTIVE_DATACLASS
     ACTIVE_DATACLASS = name
     return cls, unregister
@@ -162,6 +168,7 @@ def pyObj_as_bpyProp(data: DATA_TYPE):
     failed = []
     row = get_row(data)
     if not row:
+        Log.warning("No data to infer fields from.")
         return fields
     if isinstance(data, np.ndarray):
         ...  # TODO
@@ -180,7 +187,7 @@ def pyObj_as_bpyProp(data: DATA_TYPE):
             else:
                 failed.append((idx, v))
     if failed:
-        print(f"❌ Failed to infer fields for: {failed}")
+        Log.error(f"Failed to infer fields for: {failed}")
     return fields
 
 
@@ -188,9 +195,9 @@ def get_row(data: DATA_TYPE) -> np.ndarray | Sequence | dict | None:
     try:
         if data and len(data) > 0:
             return data[0]
-        return data
     except TypeError:
-        return data
+        ...
+    return data
 
 
 class ColumnEntity(bpy.types.PropertyGroup):
@@ -245,7 +252,7 @@ def pyObj_fill_bpyProp(data: DATA_TYPE):
     """实际执行导入数据的函数"""
     for idx, row in enumerate(data):
         New = G.data.add()
-        New.ID = idx
+        New.ID_ = idx
         if isinstance(row, dict):
             for k, v in row.items():
                 if hasattr(New, k):
@@ -258,26 +265,7 @@ def pyObj_fill_bpyProp(data: DATA_TYPE):
         for idx in range(len(G.data[0].keys())):
             Col: ColumnEntity = G.table.cols.add()
         Col.split = 1  # the last has remaining space
-    print(f"filled {len(G.data)} rows, {len(G.table.cols)} cols")
-
-
-def delayed(func: Callable):
-    """To prevent AttributeError: '_PropertyDeferred' object has no attribute"""
-    global TIMER
-    if hasattr(G.data, "add"):
-        func()
-        TIMER = 0
-        return None  # 返回None表示定时器不需要重复执行
-    else:
-        print("Waiting for G.data to be ready...")
-        TIMER += 0.1
-        if TIMER >= TIMEOUT:
-            TIMER = 0
-            print(G.data, type(G.data))
-            raise TimeoutError(
-                f"G.data:{type(G.data).__name__}={G.data} is not ready after waiting."
-            )
-        return 0.1
+    Log.info(f"filled {len(G.data)} rows, {len(G.table.cols)} cols")
 
 
 def Import(
@@ -313,9 +301,9 @@ def Import(
             G.data.clear()
             G.table.cols.clear()
         except AttributeError as e:
-            print(f"Error clearing columns: {e}")
+            Log.error(f"clearing columns: {e}")
     if isinstance(Class, str):
-        genPropertyGroup(name=Class, fields=fields, data=data)
+        _, unreg = genPropertyGroup(name=Class, fields=fields, data=data)
         if hasattr(scene, Class):
             G.data = getattr(scene, Class)
     if isinstance(data, np.ndarray):
@@ -324,15 +312,13 @@ def Import(
         ...
     global ACTIVE_DATACLASS
     ACTIVE_DATACLASS = Class if isinstance(Class, str) else Class.__name__
-    bpy.app.timers.register(
-        partial(delayed, partial(pyObj_fill_bpyProp, data)), first_interval=0.1
-    )
+    pyObj_fill_bpyProp(data)
 
 
 def export() -> list[dict[str, Any]]:
     """export data from table UI list"""
     res = [{k: v for k, v in item.items()} for item in G.data]
-    print(res)
+    Log.debug(res)
     return res
 
 
@@ -418,7 +404,7 @@ class ImportOperator(bpy.types.Operator):
         Import(
             MOCK_DATA,
             act="refresh",
-            # Class="DynamicData",
+            Class="StaticData",
         )
         return {"FINISHED"}
 
@@ -433,28 +419,32 @@ class ExportOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class_data = [StaticData, ColumnEntity, TableSystem]
-class_ui = [Table, TablePanel, ImportOperator, ExportOperator]
+CLASS_DATA = [StaticData, ColumnEntity, TableSystem]
+CLASS_UI = [Table, TablePanel, ImportOperator, ExportOperator]
+UNREG: list[Callable] = []
 
 
 def register():
-    [bpy.utils.register_class(cls) for cls in class_data]
+    [bpy.utils.register_class(cls) for cls in CLASS_DATA]
     bpy.types.Scene.TableData = bpy.props.PointerProperty(  # type:ignore
         type=TableSystem
     )
     bpy.types.Scene.StaticData = bpy.props.CollectionProperty(  # type: ignore
         type=StaticData,
     )
-    [bpy.utils.register_class(cls) for cls in class_ui]
+    [bpy.utils.register_class(cls) for cls in CLASS_UI]
 
 
 def unregister():
+    Log.debug("🗑 Unregistering...")
     del bpy.types.Scene.TableData  # type: ignore
-    for cls in reversed(class_data + class_ui):
+    for func in UNREG:
+        func()
+    for cls in reversed(CLASS_DATA + CLASS_UI):
         try:
             bpy.utils.unregister_class(cls)
         except Exception as e:
-            print(e)
+            Log.error("", exc_info=e)
 
 
 if __name__ == "__main__":
