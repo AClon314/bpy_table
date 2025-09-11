@@ -111,11 +111,12 @@ class StaticData(bpy.types.PropertyGroup):
 
 
 def unreg(cls: type[bpy.types.PropertyGroup], name: str):
+    """delattr & unregister_class"""
     delattr(bpy.types.Scene, name)
     bpy.utils.unregister_class(cls)
 
 
-def genPropertyGroup(
+def _genPropertyGroup(
     name: str, fields: dict[str, bpy_props_Property] = {}, data: DATA_TYPE = []
 ):
     """
@@ -143,7 +144,7 @@ def genPropertyGroup(
     if not name.isidentifier():
         raise ValueError(f"Invalid class name: {name}")
     if not fields:
-        fields = pyObj_as_bpyProp(data)
+        fields = _pyObj_as_bpyProp(data)
     fields.setdefault("ID_", bpy.props.IntProperty())  # type: ignore
     fields.setdefault("SELECTED_", bpy.props.BoolProperty())  # type: ignore
     attrs = {"__annotations__": fields}
@@ -162,7 +163,16 @@ def genPropertyGroup(
     return cls, unregister
 
 
-def pyObj_as_bpyProp(data: DATA_TYPE):
+def get_row(data: DATA_TYPE) -> np.ndarray | Sequence | dict | None:
+    try:
+        if data and len(data) > 0:
+            return data[0]
+    except TypeError:
+        ...
+    return data
+
+
+def _pyObj_as_bpyProp(data: DATA_TYPE):
     """guess dict(colName = bpy.props.*Property) from data"""
     fields: dict[str, bpy_props_Property] = {}
     failed = []
@@ -191,13 +201,24 @@ def pyObj_as_bpyProp(data: DATA_TYPE):
     return fields
 
 
-def get_row(data: DATA_TYPE) -> np.ndarray | Sequence | dict | None:
-    try:
-        if data and len(data) > 0:
-            return data[0]
-    except TypeError:
-        ...
-    return data
+def _pyObj_fill_bpyProp(data: DATA_TYPE):
+    """实际执行导入数据的函数"""
+    for idx, row in enumerate(data):
+        New = G.data.add()
+        New.ID_ = idx
+        if isinstance(row, dict):
+            for k, v in row.items():
+                if hasattr(New, k):
+                    setattr(New, k, v)
+        elif isinstance(row, Sequence):
+            for i, v in enumerate(row):
+                if hasattr(New, f"{i}"):
+                    setattr(New, f"{i}", v)
+    if len(G.data) > 0:
+        for idx in range(len(G.data[0].keys())):
+            Col: ColumnEntity = G.table.cols.add()
+        Col.split = 1  # the last has remaining space
+    Log.info(f"filled {len(G.data)} rows, {len(G.table.cols)} cols")
 
 
 class ColumnEntity(bpy.types.PropertyGroup):
@@ -248,26 +269,6 @@ class TableSystem(bpy.types.PropertyGroup):
         return sorted(data, key=lambda x: x.get(sort_col, ""), reverse=reverse)
 
 
-def pyObj_fill_bpyProp(data: DATA_TYPE):
-    """实际执行导入数据的函数"""
-    for idx, row in enumerate(data):
-        New = G.data.add()
-        New.ID_ = idx
-        if isinstance(row, dict):
-            for k, v in row.items():
-                if hasattr(New, k):
-                    setattr(New, k, v)
-        elif isinstance(row, Sequence):
-            for i, v in enumerate(row):
-                if hasattr(New, f"{i}"):
-                    setattr(New, f"{i}", v)
-    if len(G.data) > 0:
-        for idx in range(len(G.data[0].keys())):
-            Col: ColumnEntity = G.table.cols.add()
-        Col.split = 1  # the last has remaining space
-    Log.info(f"filled {len(G.data)} rows, {len(G.table.cols)} cols")
-
-
 def Import(
     data: DATA_TYPE,
     act: Literal["add", "refresh", "once"] = "add",
@@ -303,7 +304,7 @@ def Import(
         except AttributeError as e:
             Log.error(f"clearing columns: {e}")
     if isinstance(Class, str):
-        _, unreg = genPropertyGroup(name=Class, fields=fields, data=data)
+        _, unreg = _genPropertyGroup(name=Class, fields=fields, data=data)
         if hasattr(scene, Class):
             G.data = getattr(scene, Class)
     if isinstance(data, np.ndarray):
@@ -312,7 +313,7 @@ def Import(
         ...
     global ACTIVE_DATACLASS
     ACTIVE_DATACLASS = Class if isinstance(Class, str) else Class.__name__
-    pyObj_fill_bpyProp(data)
+    _pyObj_fill_bpyProp(data)
 
 
 def export() -> list[dict[str, Any]]:
@@ -387,6 +388,7 @@ class TablePanel(bpy.types.Panel, Panel):
             else:
                 col.prop(data, "split", text="", emboss=False)
             col.prop(COLS[idx], "selected", text=propNames[idx])
+            # TODO: 添加列筛选功能
             # col.prop_search(
             #     COLS[idx], "selected_object_name", bpy.data, "objects", text="Object"
             # )
