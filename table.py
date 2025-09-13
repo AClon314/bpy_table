@@ -3,11 +3,25 @@ UI list(template_list)
 expose template_list, general operators
 """
 
+BL_LABEL = "Table"
+BL_IDNAME = "table_sheet"
+BL_SPACE_TYPE = "VIEW_3D"
+BL_REGION_TYPE = "UI"
+BL_CATEGORY = "Development"
+MIN_RATIO = 0.03
+ACTIVE_DATACLASS = "RowData"
+TIMER = 0
+TIMEOUT = 3
+MOCK_DATA = [
+    {"text": "00:00", "FLOAT": 0.0},
+    {"text": "00:01", "FLOAT": 1.0},
+    {"text": "01:00", "FLOAT": 2.0},
+    {"text": "01:23", "FLOAT": 3.0},
+]
 import bpy
 import numpy as np
-import argparse
 import logging
-from typing import Any, Callable, Literal, Sequence, Union
+from typing import Any, Callable, Generic, Literal, Sequence, TypeVar, Union
 
 
 def getLogger(name=__name__):
@@ -24,8 +38,6 @@ def getLogger(name=__name__):
     Log.addHandler(_log_handler)  # bpy hijack the logging output
     return Log
 
-
-Log = getLogger(__name__)
 
 bpy_types_Property = Union[
     type(bpy.types.BoolProperty),
@@ -64,28 +76,17 @@ PY_TO_PROP: dict[type | tuple[type, ...], Callable[..., bpy_props_Property]] = (
 )
 dict_strAny = dict[str, Any]
 DATA_TYPE = np.ndarray | Sequence[Sequence | dict_strAny]
-
-BL_LABEL = "Table"
-BL_IDNAME = "table_sheet"
-BL_SPACE_TYPE = "VIEW_3D"
-BL_REGION_TYPE = "UI"
-BL_CATEGORY = "Development"
-MIN_RATIO = 0.03
-ACTIVE_DATACLASS = "StaticData"
-TIMER = 0
-TIMEOUT = 3
-MOCK_DATA = [
-    {"text": "00:00", "FLOAT": 0.0},
-    {"text": "00:01", "FLOAT": 1.0},
-    {"text": "01:00", "FLOAT": 2.0},
-    {"text": "01:23", "FLOAT": 3.0},
-]
+TV = TypeVar("TV")
+Log = getLogger(__name__)
 
 
-class CollectionProperty(list[dict_strAny]):
+class CollectionProperty(list[TV], Generic[TV]):
     """typing for bpy.props.CollectionProperty"""
 
-    def add(self) -> argparse.Namespace: ...
+    def add(self) -> TV: ...
+
+
+RowDataCollectionProperty = CollectionProperty["RowData"]
 
 
 class Global:
@@ -98,7 +99,11 @@ class Global:
         return bpy.context.scene.TableSystem  # type:ignore
 
     @property
-    def data(self) -> CollectionProperty:
+    def cols(self) -> CollectionProperty["ColumnEntity"]:
+        return self.table.cols
+
+    @property
+    def data(self) -> RowDataCollectionProperty:
         if not self._data:
             self._data = getattr(bpy.context.scene, ACTIVE_DATACLASS)
         return self._data  # type: ignore
@@ -124,22 +129,24 @@ class Panel:
     # bl_options = {"DEFAULT_CLOSED"}
 
 
-class StaticData(bpy.types.PropertyGroup):
+class RowData(bpy.types.PropertyGroup):
     """⭐ Your custom data struct"""
 
     ID_: bpy.props.IntProperty(name="Index")  # type:ignore
     SELECTED_: bpy.props.BoolProperty(name="Selected")  # type:ignore
-    text: bpy.props.StringProperty(
-        # update=update_text, options={"TEXTEDIT_UPDATE"}
-    )  # type: ignore
-    FLOAT: bpy.props.FloatProperty()  # type:ignore
-    V_INT: bpy.props.IntVectorProperty()  # type:ignore
-    V_FLOAT: bpy.props.FloatVectorProperty()  # type:ignore
+    # text: bpy.props.StringProperty(
+    #     # update=update_text, options={"TEXTEDIT_UPDATE"}
+    # )  # type: ignore
+    # FLOAT: bpy.props.FloatProperty()  # type:ignore
+    # V_INT: bpy.props.IntVectorProperty()  # type:ignore
+    # V_FLOAT: bpy.props.FloatVectorProperty()  # type:ignore
     # ENUM: bpy.props.EnumProperty()  # type:ignore
 
-    @classmethod
-    def len(cls):
-        return len(cls.__annotations__)
+
+def reg(cls: type[bpy.types.PropertyGroup], name: str, prop: bpy_props_Property | None):
+    """register_class & setattr"""
+    bpy.utils.register_class(cls)
+    setattr(bpy.types.Scene, name, prop)
 
 
 def unreg(cls: type[bpy.types.PropertyGroup], name: str):
@@ -153,21 +160,18 @@ def _genCollectionProp(
     bases: Sequence[bpy_types_Property],
     var_type: dict[str, bpy_props_Property],
 ):
-    """Because G.table.StaticData is readonly , so you have to mount dynamic class to bpy.types.Scene"""
+    """Because G.table.RowData is readonly , so you have to mount dynamic class to bpy.types.Scene"""
     if not name.isidentifier():
         raise ValueError(f"Invalid class name: {name}")
     attrs = {"__annotations__": var_type}
     Log.debug(f"{attrs=}")
     cls: type[bpy.types.PropertyGroup] = type(name, bases, attrs)  # type:ignore
-
-    bpy.utils.register_class(cls)
-    setattr(bpy.types.Scene, name, bpy.props.CollectionProperty(type=cls))
+    reg(cls, name, bpy.props.CollectionProperty(type=cls))
 
     def unregister():
         unreg(cls, name)
 
     UNREG.append(unregister)
-
     return cls, unregister
 
 
@@ -175,7 +179,7 @@ def _genPropertyGroup(
     name: str, var_type: dict[str, bpy_props_Property] = {}, data: DATA_TYPE = []
 ):
     """
-    动态创建一个继承自 bpy.types.PropertyGroup 的类，一定包含 ID_ & SELECTED_ 字段，并注册到 bpy.types.Scene.{name} 上。
+    动态创建一个继承自 bpy.types.PropertyGroup 的类，一定包含 ID\\_ & SELECTED\\_ 字段，并注册到 bpy.types.Scene.{name} 上。
 
     TODO: 存储动态类的列名，到 text_editor，并设为启动时载入，以便在启动时读取、恢复
 
@@ -187,7 +191,6 @@ def _genPropertyGroup(
         {colName: bpy.props.*Property}
     data:
         optional, if provided, will infer fields from data keys and values.
-
 
     Returns
     -------
@@ -232,15 +235,10 @@ def _pyObj_as_bpyProp(data: DATA_TYPE):
     if not row:
         Log.warning("No data to infer fields from.")
         return var_type, failed
-    if isinstance(row, np.ndarray):
-        Iter = row  # TODO
     elif isinstance(row, dict):
         Iter = row.items()
-    elif isinstance(row, Sequence):
-        Iter = enumerate(row)
     else:
-        Log.error("")
-        return var_type, failed
+        Iter = enumerate(row)
     for k, v in Iter:
         k = str(k)
         prop = PY_TO_PROP.get(type(v))
@@ -261,18 +259,18 @@ def _pyObj_fill_bpyProp(data: DATA_TYPE):
         New.ID_ = idx
         New.SELECTED_ = False
         if isinstance(row, dict):
-            for k, v in row.items():
-                if hasattr(New, k):
-                    setattr(New, k, v)
-        elif isinstance(row, Sequence):
-            for i, v in enumerate(row):
-                if hasattr(New, f"{i}"):
-                    setattr(New, f"{i}", v)
+            Iter = row.items()
+        else:
+            Iter = enumerate(row)
+        for k, v in Iter:
+            k = str(k)
+            if hasattr(New, k):
+                setattr(New, k, v)
     if len(G.data) > 0:
         for idx in range(len(G.propsNames)):
-            Col: ColumnEntity = G.table.cols.add()
+            Col = G.cols.add()
         Col.split = 1  # the last has remaining space
-    Log.info(f"filled {len(G.data)} rows, {len(G.table.cols)} cols")
+    Log.info(f"filled {len(G.data)} rows, {len(G.cols)} cols")
 
 
 class ColumnEntity(bpy.types.PropertyGroup):
@@ -293,9 +291,9 @@ class ColumnEntity(bpy.types.PropertyGroup):
     search_keyword: bpy.props.StringProperty(
         name="Search", description="搜索/筛选关键词，支持模糊/正则匹配"
     )  # type:ignore
-    # search_from: bpy.props.CollectionProperty(
-    #     name="Filter", description="preserved for filter"
-    # )  # type:ignore
+    search_from: bpy.props.CollectionProperty(
+        name="Filter", description="preserved for filter"  # type=... in dynamic class
+    )  # type:ignore
 
 
 class TableSystem(bpy.types.PropertyGroup):
@@ -312,7 +310,7 @@ class TableSystem(bpy.types.PropertyGroup):
 def Import(
     data: DATA_TYPE,
     act: Literal["add", "refresh", "once"] = "add",
-    Class: type[bpy.types.PropertyGroup] | str = StaticData,
+    Class: type[bpy.types.PropertyGroup] | str = RowData,
     fields: dict[str, bpy_props_Property] = {},
 ):
     """import data into table UI list
@@ -340,17 +338,13 @@ def Import(
     if act == "refresh":
         try:
             G.data.clear()
-            G.table.cols.clear()
+            G.cols.clear()
         except AttributeError as e:
             Log.error(f"clearing columns: {e}")
     if isinstance(Class, str):
         _, unreg = _genPropertyGroup(name=Class, var_type=fields, data=data)
         if hasattr(scene, Class):
             G.data = getattr(scene, Class)
-    if isinstance(data, np.ndarray):
-        ...  # TODO
-    else:
-        ...
     global ACTIVE_DATACLASS
     ACTIVE_DATACLASS = Class if isinstance(Class, str) else Class.__name__
     _pyObj_fill_bpyProp(data)
@@ -390,13 +384,13 @@ class TableUIList(bpy.types.UIList):
     ):
         propNames = G.propsNames
         if self.layout_type in {"DEFAULT", "COMPACT"}:
-            factor = G.table.cols[0].split
+            factor = G.cols[0].split
             remain = 1 - factor
             split = layout.split(factor=factor, align=True)
             # 绘制第一列
             _draw_prop(split, item, propNames[0])
             for idx, prop in enumerate(propNames[1:], start=1):
-                factor = _get_factor(G.table.cols[idx], remain)
+                factor = _get_factor(G.cols[idx], remain)
                 remain = 1 - factor
                 split = split.split(factor=factor, align=True)
                 _draw_prop(split, item, prop)
@@ -413,7 +407,7 @@ class TablePanel(bpy.types.Panel, Panel):
             return
         row = layout.row(align=True)
         propNames = G.propsNames
-        COLS: list[ColumnEntity] = G.table.cols
+        COLS = G.cols
         remain = 1 - COLS[0].split
         split = row.split(factor=COLS[0].split, align=True)
         _colHead(split, propNames, COLS, 0)
@@ -504,7 +498,7 @@ class ImportOperator(bpy.types.Operator):
         Import(
             MOCK_DATA,
             act="refresh",
-            Class="StaticData",
+            Class="RowData",
         )
         return {"FINISHED"}
 
@@ -519,7 +513,7 @@ class ExportOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASS_DATA = [StaticData, ColumnEntity, TableSystem]
+CLASS_DATA = [RowData, ColumnEntity, TableSystem]
 CLASS_UI = [TableUIList, TablePanel, ImportOperator, ExportOperator]
 UNREG: list[Callable] = []
 
@@ -529,8 +523,8 @@ def register():
     bpy.types.Scene.TableSystem = bpy.props.PointerProperty(  # type:ignore
         type=TableSystem
     )
-    bpy.types.Scene.StaticData = bpy.props.CollectionProperty(  # type: ignore
-        type=StaticData,
+    bpy.types.Scene.RowData = bpy.props.CollectionProperty(  # type: ignore
+        type=RowData,
     )
     [bpy.utils.register_class(cls) for cls in CLASS_UI]
 
