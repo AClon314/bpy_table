@@ -15,7 +15,7 @@ def getLogger(name=__name__):
     _log_handler.setLevel(logging.DEBUG)
     _log_handler.setFormatter(
         logging.Formatter(
-            "%(levelname)s %(asctime)s %(filename)s:%(lineno)d\t%(message)s",
+            "%(levelname)s %(asctime)s %(name)s\t%(message)s",
             datefmt="%H:%M:%S",
         )
     )
@@ -27,6 +27,16 @@ def getLogger(name=__name__):
 
 Log = getLogger(__name__)
 
+bpy_types_Property = Union[
+    type(bpy.types.BoolProperty),
+    type(bpy.types.IntProperty),
+    type(bpy.types.FloatProperty),
+    type(bpy.types.StringProperty),
+    type(bpy.types.EnumProperty),
+    type(bpy.types.PointerProperty),
+    type(bpy.types.CollectionProperty),
+    type(bpy.types.PropertyGroup),
+]
 bpy_props_Property = Union[
     type(bpy.props.BoolProperty),
     type(bpy.props.BoolVectorProperty),
@@ -39,18 +49,21 @@ bpy_props_Property = Union[
     type(bpy.props.PointerProperty),
     type(bpy.props.CollectionProperty),
 ]
-PY_TO_PROP = {
-    Sequence[bool]: bpy.props.BoolVectorProperty,
-    Sequence[int]: bpy.props.IntVectorProperty,
-    Sequence[float]: bpy.props.FloatVectorProperty,
-    bool: bpy.props.BoolProperty,
-    int: bpy.props.IntProperty,
-    float: bpy.props.FloatProperty,
-    str: bpy.props.StringProperty,
-    # enum: bpy.props.EnumProperty,
-    # object: bpy.props.PointerProperty,
-}
-DATA_TYPE = np.ndarray | Sequence[Sequence | dict]
+PY_TO_PROP: dict[type | tuple[type, ...], Callable[..., bpy_props_Property]] = (
+    {  # type:ignore
+        Sequence[bool]: bpy.props.BoolVectorProperty,
+        Sequence[int]: bpy.props.IntVectorProperty,
+        Sequence[float]: bpy.props.FloatVectorProperty,
+        bool: bpy.props.BoolProperty,
+        int: bpy.props.IntProperty,
+        float: bpy.props.FloatProperty,
+        str: bpy.props.StringProperty,
+        # enum: bpy.props.EnumProperty,
+        # object: bpy.props.PointerProperty,
+    }
+)
+dict_strAny = dict[str, Any]
+DATA_TYPE = np.ndarray | Sequence[Sequence | dict_strAny]
 
 BL_LABEL = "Table"
 BL_IDNAME = "table_sheet"
@@ -69,19 +82,23 @@ MOCK_DATA = [
 ]
 
 
-class PropertyList(list):
+class CollectionProperty(list[dict_strAny]):
+    """typing for bpy.props.CollectionProperty"""
+
     def add(self) -> argparse.Namespace: ...
 
 
 class Global:
-    _data = PropertyList()
+    """Have to use @property to defer access to bpy.context.scene"""
+
+    _data = CollectionProperty()
 
     @property
     def table(self) -> "TableSystem":
-        return bpy.context.scene.TableData  # type:ignore
+        return bpy.context.scene.TableSystem  # type:ignore
 
     @property
-    def data(self) -> PropertyList:
+    def data(self) -> CollectionProperty:
         if not self._data:
             self._data = getattr(bpy.context.scene, ACTIVE_DATACLASS)
         return self._data  # type: ignore
@@ -89,6 +106,10 @@ class Global:
     @data.setter
     def data(self, value: type[bpy.types.PropertyGroup]):
         self._data = value  # type: ignore
+
+    @property
+    def propsNames(self):
+        return list(self.data[0].keys())
 
 
 G = Global()
@@ -104,10 +125,10 @@ class Panel:
 
 
 class StaticData(bpy.types.PropertyGroup):
-    """Your custom data struct"""
+    """⭐ Your custom data struct"""
 
-    ID_: bpy.props.IntProperty()  # type:ignore
-    SELECTED_: bpy.props.BoolProperty()  # type:ignore
+    ID_: bpy.props.IntProperty(name="Index")  # type:ignore
+    SELECTED_: bpy.props.BoolProperty(name="Selected")  # type:ignore
     text: bpy.props.StringProperty(
         # update=update_text, options={"TEXTEDIT_UPDATE"}
     )  # type: ignore
@@ -127,20 +148,43 @@ def unreg(cls: type[bpy.types.PropertyGroup], name: str):
     bpy.utils.unregister_class(cls)
 
 
+def _genCollectionProp(
+    name: str,
+    bases: Sequence[bpy_types_Property],
+    var_type: dict[str, bpy_props_Property],
+):
+    """Because G.table.StaticData is readonly , so you have to mount dynamic class to bpy.types.Scene"""
+    if not name.isidentifier():
+        raise ValueError(f"Invalid class name: {name}")
+    attrs = {"__annotations__": var_type}
+    Log.debug(f"{attrs=}")
+    cls: type[bpy.types.PropertyGroup] = type(name, bases, attrs)  # type:ignore
+
+    bpy.utils.register_class(cls)
+    setattr(bpy.types.Scene, name, bpy.props.CollectionProperty(type=cls))
+
+    def unregister():
+        unreg(cls, name)
+
+    UNREG.append(unregister)
+
+    return cls, unregister
+
+
 def _genPropertyGroup(
-    name: str, fields: dict[str, bpy_props_Property] = {}, data: DATA_TYPE = []
+    name: str, var_type: dict[str, bpy_props_Property] = {}, data: DATA_TYPE = []
 ):
     """
     动态创建一个继承自 bpy.types.PropertyGroup 的类，一定包含 ID_ & SELECTED_ 字段，并注册到 bpy.types.Scene.{name} 上。
 
-    TODO: 存储动态类的列名，以便在启动时读取、恢复
+    TODO: 存储动态类的列名，到 text_editor，并设为启动时载入，以便在启动时读取、恢复
 
     Args
     ----
     name:
         class name, python varname style.
-    fields:
-        can use partial with args.
+    var_type:
+        {colName: bpy.props.*Property}
     data:
         optional, if provided, will infer fields from data keys and values.
 
@@ -152,65 +196,61 @@ def _genPropertyGroup(
     unregister:
         function to unregister the class
     """
-    if not name.isidentifier():
-        raise ValueError(f"Invalid class name: {name}")
-    if not fields:
-        fields = _pyObj_as_bpyProp(data)
-    fields.setdefault("ID_", bpy.props.IntProperty())  # type: ignore
-    fields.setdefault("SELECTED_", bpy.props.BoolProperty())  # type: ignore
-    attrs = {"__annotations__": fields}
-    Log.debug(f"{attrs=}")
-    # 动态创建类
-    cls = type(name, (bpy.types.PropertyGroup,), attrs)
-    bpy.utils.register_class(cls)
-    setattr(bpy.types.Scene, name, bpy.props.CollectionProperty(type=cls))
-
-    def unregister():
-        unreg(cls, name)
-
-    # CLASS_DATA.append(cls)
-    UNREG.append(unregister)
+    if not var_type:
+        var_type, failed = _pyObj_as_bpyProp(data)
+    var_type.setdefault("ID_", bpy.props.IntProperty(name="Index"))  # type: ignore
+    var_type.setdefault("SELECTED_", bpy.props.BoolProperty(name="Selected"))  # type: ignore
+    cls, unreg = _genCollectionProp(
+        name=name,
+        bases=(bpy.types.PropertyGroup,),
+        var_type=var_type,
+    )
     global ACTIVE_DATACLASS
     ACTIVE_DATACLASS = name
-    return cls, unregister
-
-
-def get_row(data: DATA_TYPE) -> np.ndarray | Sequence | dict | None:
-    try:
-        if data and len(data) > 0:
-            return data[0]
-    except TypeError:
-        ...
-    return data
+    return cls, unreg
 
 
 def _pyObj_as_bpyProp(data: DATA_TYPE):
-    """guess dict(colName = bpy.props.*Property) from data"""
-    fields: dict[str, bpy_props_Property] = {}
+    """
+    guess dict(colName = bpy.props.*Property) from data
+
+    Args
+    ----
+    row: 1 dimensional data
+        a single row of data, can be dict or sequence
+
+    Returns
+    -------
+    dict:
+        {colName: bpy.props.*Property}
+    list:
+        list of (colName, value) that failed to infer property type
+    """
+    row = data[0]
+    var_type: dict[str, bpy_props_Property] = {}
     failed = []
-    row = get_row(data)
     if not row:
         Log.warning("No data to infer fields from.")
-        return fields
-    if isinstance(data, np.ndarray):
-        ...  # TODO
+        return var_type, failed
+    if isinstance(row, np.ndarray):
+        Iter = row  # TODO
     elif isinstance(row, dict):
-        for k, v in row.items():
-            prop = PY_TO_PROP.get(type(v))
-            if prop:
-                fields[k] = prop()
-            else:
-                failed.append((k, v))
+        Iter = row.items()
     elif isinstance(row, Sequence):
-        for idx, v in enumerate(row):
-            prop = PY_TO_PROP.get(type(v))
-            if prop:
-                fields[f"{idx}"] = prop()
-            else:
-                failed.append((idx, v))
-    if failed:
-        Log.error(f"Failed to infer fields for: {failed}")
-    return fields
+        Iter = enumerate(row)
+    else:
+        Log.error("")
+        return var_type, failed
+    for k, v in Iter:
+        k = str(k)
+        prop = PY_TO_PROP.get(type(v))
+        if prop:
+            var_type[k] = prop()
+        else:
+            failed.append((k, v))
+    Log.debug(f"{var_type=}")
+    Log.error(f"{failed=}") if failed else ...
+    return var_type, failed
 
 
 def _pyObj_fill_bpyProp(data: DATA_TYPE):
@@ -229,7 +269,7 @@ def _pyObj_fill_bpyProp(data: DATA_TYPE):
                 if hasattr(New, f"{i}"):
                     setattr(New, f"{i}", v)
     if len(G.data) > 0:
-        for idx in range(len(G.data[0].keys())):
+        for idx in range(len(G.propsNames)):
             Col: ColumnEntity = G.table.cols.add()
         Col.split = 1  # the last has remaining space
     Log.info(f"filled {len(G.data)} rows, {len(G.table.cols)} cols")
@@ -250,40 +290,23 @@ class ColumnEntity(bpy.types.PropertyGroup):
     selected: bpy.props.BoolProperty(
         name="Selected", description="选择该列进行排序"
     )  # type:ignore
-    filter: bpy.props.StringProperty(
-        name="Filter", description="过滤该列内容"
+    search_keyword: bpy.props.StringProperty(
+        name="Search", description="搜索/筛选关键词，支持模糊/正则匹配"
     )  # type:ignore
+    # search_from: bpy.props.CollectionProperty(
+    #     name="Filter", description="preserved for filter"
+    # )  # type:ignore
 
 
 class TableSystem(bpy.types.PropertyGroup):
     index: bpy.props.IntProperty(
         default=0,
+        name="Active Index",
+        description="Index of the active item in the list",
     )  # type: ignore
     cols: bpy.props.CollectionProperty(
-        type=ColumnEntity,
+        type=ColumnEntity, name="Columns", description="Table Columns"
     )  # type: ignore
-    sort_col: bpy.props.EnumProperty(
-        name="Sort By",
-        description="选择排序列",
-        items=lambda self, context: [
-            (col, col, "") for col in TableSystem.get_columns()
-        ],
-    )  # type:ignore
-    sort_reverse: bpy.props.BoolProperty(
-        name="Descending", description="降序排列", default=False
-    )  # type:ignore
-
-    @classmethod
-    def get_columns(cls):
-        if G.data:
-            return list(G.data[0].keys())
-        return []
-
-    @classmethod
-    def sort_data(cls, data, sort_col, reverse=False):
-        if not sort_col:
-            return data
-        return sorted(data, key=lambda x: x.get(sort_col, ""), reverse=reverse)
 
 
 def Import(
@@ -321,7 +344,7 @@ def Import(
         except AttributeError as e:
             Log.error(f"clearing columns: {e}")
     if isinstance(Class, str):
-        _, unreg = _genPropertyGroup(name=Class, fields=fields, data=data)
+        _, unreg = _genPropertyGroup(name=Class, var_type=fields, data=data)
         if hasattr(scene, Class):
             G.data = getattr(scene, Class)
     if isinstance(data, np.ndarray):
@@ -333,7 +356,7 @@ def Import(
     _pyObj_fill_bpyProp(data)
 
 
-def export() -> list[dict[str, Any]]:
+def export() -> list[dict_strAny]:
     """export data from table UI list"""
     res = [{k: v for k, v in item.items()} for item in G.data]
     Log.debug(res)
@@ -354,7 +377,7 @@ def _get_factor(data, remain):
     return min(1 - MIN_RATIO, max(MIN_RATIO, data.split / remain))
 
 
-class Table(bpy.types.UIList):
+class TableUIList(bpy.types.UIList):
     def draw_item(
         self,
         context,
@@ -365,7 +388,7 @@ class Table(bpy.types.UIList):
         active_data,
         active_propname,
     ):
-        propNames: list[str] = list(G.data[0].keys())
+        propNames = G.propsNames
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             factor = G.table.cols[0].split
             remain = 1 - factor
@@ -389,8 +412,8 @@ class TablePanel(bpy.types.Panel, Panel):
         if not (hasattr(G, "table") and hasattr(G, "data") and G.table and G.data):
             return
         row = layout.row(align=True)
-        propNames: list[str] = list(G.data[0].keys())
-        COLS = G.table.cols
+        propNames = G.propsNames
+        COLS: list[ColumnEntity] = G.table.cols
         remain = 1 - COLS[0].split
         split = row.split(factor=COLS[0].split, align=True)
         _colHead(split, propNames, COLS, 0)
@@ -404,23 +427,72 @@ class TablePanel(bpy.types.Panel, Panel):
 
             _colHead(split, propNames, COLS, idx)
         row = layout.row(align=True)
-        row.template_list("Table", "", scene, ACTIVE_DATACLASS, G.table, "index")
+        row.template_list("TableUIList", "", scene, ACTIVE_DATACLASS, G.table, "index")
 
 
-def _colHead(split: bpy.types.UILayout, propNames: list[str], COLS, idx: int, **kwargs):
+def _colHead(
+    split: bpy.types.UILayout,
+    propNames: list[str],
+    COLS: list[ColumnEntity],
+    idx: int,
+    **kwargs,
+):
+    """⭐ draw column header"""
     col = split.column(align=True)
     col.prop(COLS[idx], "split", text="", emboss=False)
     col.prop(COLS[idx], "selected", text=propNames[idx])
-    col.prop_search(
-        COLS[idx],
-        "filter",
-        bpy.context.scene,
-        ACTIVE_DATACLASS,
-        text="",
-        icon="FILTER",  # TODO: 'NONE' but still show icon, upstream bug.
-        results_are_suggestions=True,
-        **kwargs,
-    )
+    # col.prop_search(
+    #     COLS[idx],
+    #     "search_keyword",
+    #     COLS[idx],
+    #     "search_from",
+    #     text="",
+    #     icon="FILTER",  # TODO: 'NONE' but still show icon, upstream bug.
+    #     results_are_suggestions=True,
+    #     **kwargs,
+    # )
+
+
+def _gen_col_search_data(data: DATA_TYPE):
+    """为每列创建独立的搜索数据集合，每次更新时触发"""
+    if not G.data:
+        return
+    propNames = G.propsNames
+
+    # 为每列创建一个唯一的PropertyGroup类
+    for col_idx, col_name in enumerate(propNames):
+        # 创建动态类名
+        className = f"{ACTIVE_DATACLASS}_search_{col_name}_{col_idx}"
+
+        # 定义属性
+        var_prop = {
+            "value": bpy.props.StringProperty,
+            "index": bpy.props.IntProperty,
+        }
+
+        cls, unreg = _genCollectionProp(
+            name=className,
+            bases=(bpy.types.PropertyGroup,),
+            var_type=var_prop,
+        )
+
+        # 填充数据
+        search_from = getattr(bpy.context.scene, className)
+        unique_values = set()
+
+        for row_idx, row in enumerate(G.data):
+            if isinstance(row, dict) and col_name in row:
+                value = str(row[col_name])
+            else:
+                value = ""
+
+            # 只添加唯一值
+            if value not in unique_values:
+                unique_values.add(value)
+                search_item = search_from.add()
+                search_item.value = value
+                search_item.index = row_idx
+    return cls, unreg
 
 
 class ImportOperator(bpy.types.Operator):
@@ -448,13 +520,13 @@ class ExportOperator(bpy.types.Operator):
 
 
 CLASS_DATA = [StaticData, ColumnEntity, TableSystem]
-CLASS_UI = [Table, TablePanel, ImportOperator, ExportOperator]
+CLASS_UI = [TableUIList, TablePanel, ImportOperator, ExportOperator]
 UNREG: list[Callable] = []
 
 
 def register():
     [bpy.utils.register_class(cls) for cls in CLASS_DATA]
-    bpy.types.Scene.TableData = bpy.props.PointerProperty(  # type:ignore
+    bpy.types.Scene.TableSystem = bpy.props.PointerProperty(  # type:ignore
         type=TableSystem
     )
     bpy.types.Scene.StaticData = bpy.props.CollectionProperty(  # type: ignore
@@ -465,9 +537,12 @@ def register():
 
 def unregister():
     Log.debug("🗑 Unregistering...")
-    del bpy.types.Scene.TableData  # type: ignore
+    del bpy.types.Scene.TableSystem  # type: ignore
     for func in UNREG:
-        func()
+        try:
+            func()
+        except Exception as e:
+            Log.error("", exc_info=e)
     for cls in reversed(CLASS_DATA + CLASS_UI):
         try:
             bpy.utils.unregister_class(cls)
@@ -477,3 +552,14 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+
+"""
+Dev Notes
+# 2025
+## 9.11
+- bpy.context.scene vs bpy.types.Scene
+在UI的draw()方法中，必须用前者；否则用后者，因为bpy.context会被鼠标所在区域而受限制，而后者是全局的。
+- PropertyGroup要被CollectionProperty包裹。
+
+## 9.13
+"""
