@@ -17,7 +17,7 @@ import bpy
 import numpy as np
 from typing import Callable, Literal
 from .typo import *
-from .bpyQuery import bpq, getLogger
+from .bpyQuery import bpq, bq, getLogger
 
 DATA_TYPE = np.ndarray | Sequence[Sequence | dict_strAny]
 Log = getLogger(__name__)
@@ -69,7 +69,7 @@ class RowData(bpy.types.PropertyGroup):
 
 
 def _regPropertyGroup(
-    name: str, var_type: dict[str, bpy_props_Property] = {}, data: DATA_TYPE = []
+    name: str, var_type: dict[str, PropsProperty] = {}, data: DATA_TYPE = []
 ):
     """
     动态创建一个继承自 bpy.types.PropertyGroup 的类，一定包含 ID\\_ & SELECTED\\_ 字段，并注册到 bpy.types.Scene.{name} 上。
@@ -121,7 +121,7 @@ def _pyObj_as_bpyProp(data: DATA_TYPE):
         list of (colName, value) that failed to infer property type
     """
     row = data[0]
-    var_type: dict[str, bpy_props_Property] = {}
+    var_type: dict[str, PropsProperty] = {}
     failed = []
     if not row:
         Log.warning("No data to infer fields from.")
@@ -230,7 +230,7 @@ def Import(
     data: DATA_TYPE,
     act: Literal["add", "refresh", "once"] = "add",
     Class: type[bpy.types.PropertyGroup] | str = RowData,
-    fields: dict[str, bpy_props_Property] = {},
+    fields: dict[str, PropsProperty] = {},
 ):
     """⭐ import data into table UI list
 
@@ -392,7 +392,7 @@ def _gen_col_search_data(data: DATA_TYPE):
             "index": bpy.props.IntProperty,
         }
 
-        cls = regCollectionProp(
+        cls = bpq.regCollectionProp(
             cls_name=className,
             cls_bases=(bpy.types.PropertyGroup,),
             var_type=var_prop,
