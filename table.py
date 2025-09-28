@@ -17,7 +17,7 @@ import bpy
 import numpy as np
 from typing import Callable, Literal
 from .typo import *
-from .bpyQuery import bpq, bq, getLogger
+from .bpyQuery import Var, bpq, bq, getLogger
 
 DATA_TYPE = np.ndarray | Sequence[Sequence | dict_strAny]
 Log = getLogger(__name__)
@@ -220,10 +220,10 @@ class TableTab(bpy.types.PropertyGroup):
             type=ColumnHead, name="Columns", description="Table Column Headers"
         ),  # type: ignore
     ]
-    tabs: bpy.props.EnumProperty(
-        name="Spreadsheet",
-        description="Table Tabs",
-    )  # type: ignore
+    # tabs: bpy.props.EnumProperty(
+    #     name="Spreadsheet",
+    #     description="Table Tabs",
+    # )  # type: ignore
 
 
 def Import(
@@ -426,7 +426,7 @@ class ImportOperator(bpy.types.Operator):
         Import(
             MOCK_DATA,
             act="refresh",
-            Class="RowData",
+            # Class="RowData",
         )
         return {"FINISHED"}
 
@@ -441,7 +441,7 @@ class ExportOperator(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASS_DATA = [TableTab]
+CLASS_DATA = [RowData, TableTab]
 CLASS_UI = [TableUIList, TablePanel, ImportOperator, ExportOperator]
 UNREG: list[Callable] = []
 

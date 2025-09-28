@@ -2,7 +2,8 @@
 
 import bpy
 import logging
-from dataclasses import dataclass, field
+import itertools
+from functools import partial
 from typing import *  # type: ignore
 
 
@@ -24,7 +25,7 @@ def getLogger(name=__name__):
 Log = getLogger(__name__)
 
 dict_strAny = dict[str, Any]
-# _PS = ParamSpec("_PS")
+_PS = ParamSpec("_PS")
 _TV = TypeVar("_TV")
 FLOAT_MAX_3E38 = 3.402823e38
 TypesProperty = Union[
@@ -72,6 +73,41 @@ TypesTypes = Union[
     type(bpy.types.Object),
     type(bpy.types.GreasePencilv3),
 ]
+ContextTypes = {
+    "window_manager": "WindowManager",
+    "screen": "Screen",
+    "scene": "Scene",
+    "view_layer": "ViewLayer",
+    "workspace": "WorkSpace",
+    "collection": "Collection",
+    "object": "Object",
+    "grease_pencil": "GreasePencilv3",
+}
+Log.debug(f"ContextTypes: {ContextTypes}")
+
+
+class _Undef:
+    """https://cloud.tencent.com/developer/ask/sof/113806020/answer/128423472"""
+
+    def __new__(cls):
+        return Undef
+
+    def __reduce__(self):
+        return (_Undef, ())
+
+    def __copy__(self):
+        return Undef
+
+    def __deepcopy__(self, memo):
+        return Undef
+
+    def __call__(self, default): ...
+
+    def __bool__(self):
+        return False
+
+
+Undef = object.__new__(_Undef)
 
 
 class ContextData:
@@ -284,33 +320,18 @@ class ContextData:
         return bpy.data.fonts
 
 
-ContextTypes = {
-    "window_manager": "WindowManager",
-    "screen": "Screen",
-    "scene": "Scene",
-    "view_layer": "ViewLayer",
-    "workspace": "WorkSpace",
-    "collection": "Collection",
-    "object": "Object",
-    "grease_pencil": "GreasePencilv3",
-}
-Log.debug(f"ContextTypes: {ContextTypes}")
-
-
 class CollectionProperty(list[_TV], Generic[_TV]):
     """typing for bpy.props.CollectionProperty"""
 
-    def add(self):
-        _TV: ...
+    def add(self) -> _TV: ...
 
 
-@dataclass(kw_only=True)
-class _PropBase:
+class _PropBase(TypedDict, total=False):
     """Collection has least 6 args. Total 10 kinds of props"""
 
-    name: str = ""
-    description: str = ""
-    translation_context: str = ""
+    name: str
+    description: str
+    translation_context: str
     options: set[
         Literal[
             "HIDDEN",
@@ -324,12 +345,12 @@ class _PropBase:
             "PATH_SUPPORTS_BLEND_RELATIVE",
             "SUPPORTS_TEMPLATES",
         ]
-    ] = field(default_factory=set)
-    override: set[Literal["LIBRARY_OVERRIDABLE"]] = field(default_factory=set)
-    tags: set[str] = field(default_factory=set)
+    ]
+    override: set[Literal["LIBRARY_OVERRIDABLE"]]
+    tags: set[str]
 
 
-@dataclass
+# @dataclass
 class PropCollection(_PropBase):
     """len(args)=7"""
 
@@ -339,28 +360,23 @@ class PropCollection(_PropBase):
 SELF_CONTEXT = Callable[[bpy.types.bpy_struct, bpy.types.Context], None]
 
 
-@dataclass
-class PropPointer(_PropBase):
+class PropPointer(_PropBase, total=False):
     """len(args)=9, bpy.types.* = bpy.props.PointerProperty(type=PropertyGroup)"""
 
     type: type[bpy.types.ID | bpy.types.PropertyGroup]
-    poll: Callable[[bpy.types.bpy_struct, bpy.types.ID], bool] = field(
-        default=None, kw_only=True  # type: ignore
-    )
-    update: SELF_CONTEXT = field(default=None, kw_only=True)  # type: ignore
+    poll: Callable[[bpy.types.bpy_struct, bpy.types.ID], bool]
+    update: SELF_CONTEXT
 
 
-@dataclass(kw_only=True)
-class _PropDUGS(_PropBase, Generic[_TV]):
+class _PropDUGS(Generic[_TV], _PropBase, total=False):
     """len(args)=10"""
 
-    default: _TV = None  # type: ignore
-    update: SELF_CONTEXT = None  # type: ignore
-    get: Callable[[bpy.types.bpy_struct], _TV] = None  # type: ignore
-    set: Callable[[bpy.types.bpy_struct, _TV], None] = None  # type: ignore
+    default: _TV
+    Update: SELF_CONTEXT
+    Get: Callable[[bpy.types.bpy_struct], _TV]
+    set: Callable[[bpy.types.bpy_struct, _TV], None]
 
 
-@dataclass
 class PropEnum(_PropDUGS[_TV]):
     """len(args)=11"""
 
@@ -373,8 +389,7 @@ class PropEnum(_PropDUGS[_TV]):
     )
 
 
-@dataclass(kw_only=True)
-class _Subtype:
+class _Subtype(TypedDict, total=False):
     """`subtype` arg, except Pointer, Collection, Enum"""
 
     subtype: Literal[
@@ -393,33 +408,31 @@ class _Subtype:
         "COLOR_TEMPERATURE",
         "FREQUENCY",
         "NONE",
-    ] = "NONE"
+    ]
 
 
-@dataclass
-class PropBool(_Subtype, _PropDUGS[bool]): ...
+class PropBool(_PropDUGS[bool], _Subtype):
+    """len(args)=11"""
 
 
-@dataclass(kw_only=True)
-class _PropNum:
+class _PropNum(TypedDict, total=False):
     """len(args)=5"""
 
-    min: int | float = -FLOAT_MAX_3E38
-    max: int | float = FLOAT_MAX_3E38
-    soft_min: int | float = -FLOAT_MAX_3E38
-    soft_max: int | float = FLOAT_MAX_3E38
-    step: int = 3
+    min: int | float
+    max: int | float
+    soft_min: int | float
+    soft_max: int | float
+    step: int
 
 
-@dataclass
-class PropInt(_Subtype, _PropNum, _PropDUGS[int]): ...
+class PropInt(_PropNum, _PropDUGS[int], _Subtype):
+    """len(args)=16"""
 
 
-@dataclass(kw_only=True)
-class PropFloat(_Subtype, _PropNum, _PropDUGS[float]):
+class PropFloat(_PropNum, _PropDUGS[float], _Subtype, total=False):
     """len(args)=18"""
 
-    precision: int = 2
+    precision: int
     unit: Literal[
         "NONE",
         "LENGTH",
@@ -437,76 +450,240 @@ class PropFloat(_Subtype, _PropNum, _PropDUGS[float]):
         "WAVELENGTH",
         "COLOR_TEMPERATURE",
         "FREQUENCY",
-    ] = "NONE"
+    ]
 
 
-@dataclass(kw_only=True)
-class _PropVec:
-    """size in [1, 32]"""
-
-    size: int = 3
-
-
-@dataclass
-class PropBoolVector(_PropDUGS[Iterable[bool]], _PropVec): ...
-
-
-@dataclass
-class PropIntVector(_PropDUGS[Iterable[int]], _PropVec): ...
-
-
-@dataclass
-class PropFloatVector(_PropDUGS[Iterable[float]], _PropVec): ...
-
-
-@dataclass(kw_only=True)
-class PropStr(_PropDUGS):
+# class _PropVec(TypedDict, total=False):
+#     """size in [1, 32], default 3"""
+#     size: int
+# class PropBoolVector(_PropDUGS[Iterable[bool]], _PropVec): ...
+# class PropIntVector(_PropDUGS[Iterable[int]], _PropVec): ...
+# class PropFloatVector(_PropDUGS[Iterable[float]], _PropVec): ...
+class PropStr(_PropDUGS, total=False):
     """len(args)=14"""
 
-    maxlen: int = 0
+    maxlen: int
     search: Callable[
         [bpy.types.bpy_struct, bpy.types.Context, str], Iterable[str | tuple[str, str]]
-    ] = None  # type: ignore
-    search_options: set[Literal["SORT", "SUGGESTION"]] = field(default_factory=set)
+    ]
+    search_options: set[Literal["SORT", "SUGGESTION"]]
+
+
+@overload
+def PropDeferred(initValue: bool | type[bool], **kwargs: Unpack[PropBool]): ...
+
+
+@overload
+def PropDeferred(initValue: int | type[int], **kwargs: Unpack[PropInt]): ...
+
+
+@overload
+def PropDeferred(initValue: float | type[float], /, **kwargs: Unpack[PropFloat]): ...
+
+
+@overload
+def PropDeferred(initValue: str | type[str], **kwargs: Unpack[PropStr]): ...
+
+
+@overload
+def PropDeferred(
+    initValue: Iterable[bool] | type[bool],
+    size: int | None = None,
+    **kwargs: Unpack[PropBool],
+): ...
+
+
+@overload
+def PropDeferred(
+    initValue: Iterable[int] | type[int],
+    size: int | None = None,
+    **kwargs: Unpack[PropInt],
+): ...
+
+
+@overload
+def PropDeferred(
+    initValue: Iterable[float] | type[float],
+    size: int | None = None,
+    **kwargs: Unpack[PropFloat],
+): ...
+
+
+@overload
+def PropDeferred(initValue, size=None, **kwargs: Unpack[PropPointer]):
+    """PointerProperty
+
+    Args:
+        type (bpy.types.PropertyGroup or bpy.types.ID):
+        poll (function(self, value) -> bool):
+        update (function(self, context)):
+    """
+
+
+@overload
+def PropDeferred(**kwargs: Unpack[PropEnum]):
+    """EnumProperty
+
+    Args:
+        items (Iterable[identifier, name, description] or function(self, context) -> Iterable[identifier, name, description]):
+            full: [(identifier, name, description, icon, number), ...]
+            > There is a known bug with using a callback, Python must keep a reference to the strings returned by the callback or Blender will misbehave or even crash.
+            使用回调存在一个已知的错误，Python 必须保留对回调返回的字符串的引用，否则 Blender 会行为异常甚至崩溃。
+    """
+
+
+@overload
+def PropDeferred(initValue, size=0, **kwargs: Unpack[PropCollection]):
+    """CollectionProperty
+
+    Args:
+        type (bpy.types.PropertyGroup):
+    """
+
+
+def peek_iter(iterable: Iterable[_TV]):
+    """Detect the 1st item type of an iterable without consuming it. Don't use on dict.
+
+    Returns
+    -------
+    first_item
+
+    iterable: not consumed
+
+
+    ## raise
+    - IndexError if empty sequence
+    - StopIteration if empty iterator
+    """
+    if hasattr(iterable, "__getitem__"):
+        try:
+            return iterable[0], iterable  # type: ignore
+        except KeyError:
+            return next(iter(iterable)), iterable
+    it1, it2 = itertools.tee(iterable)
+    first = next(it1)
+    return first, it2
 
 
 def iterable(obj):
-    return hasattr(obj, "__iter__") or hasattr(obj, "__getitem__")
+    """return (is_iterable, obj)"""
+    try:
+        init_0, obj = peek_iter(obj)
+        return True, obj
+    except Exception:
+        return False, obj
 
 
-def Prop(initValue, *args, size=1, **kwargs):
-    """init dataclass props
+def PropDeferred(initValue: Any = None, size: int | None = None, **kwargs):
+    """return bpy.props.* based on initValue type
+
+    Args:
+        get (function(self) -> value):
+        set (function(self, value)):
+            called when value is _written_.
+        update (function(self, context)):
+            called when value is modified.
+
+        search (function(self, context, edit_text) -> list(str) or list(str_title, str_description)):
+        poll (function(self, value) -> bool):
+            determines whether an item is valid for this property.
+        items (list(identifier, name, description) or function(self, context) -> list(identifier, name, description)):
+            full: [(identifier, name, description, icon, number), ...]
 
     Usage:
-    - Prop(0) : PropInt
-    - Prop(int) : PropInt
-    - Prop([0]) : PropIntVector
-    - Prop((0,0,0)) : PropIntVector
-    - Prop(int, size=32) : PropIntVector
-    - Prop(int, size=0) : PropCollection, dynamic length
-    - Prop(int, size=**-3**) : PropCollection, dynamic length, filled with 3 default values initially
+    - Prop(0) : int
+    - Prop(int) : int
+    - Prop([0]) : intVector
+    - Prop(int, size=32) : intVector
+    - Prop(int, size=0) : Collection, dynamic length
+    - Prop(int, size=**-3**) : Collection, dynamic length, filled with 3 default values initially
+    - Prop(myPropertyGroup) : PointerProperty
+    - Prop(myPropertyGroup, size=0) : Collection of PropertyGroup, dynamic length
     """
-    # TODO: initdata after register
-    if size > 0 or (iterable(initValue) and not isinstance(initValue, str)):
-        if len(initValue) != size:
-            raise ValueError(f"size of default {len(initValue)=} != {size=}")
-        if isinstance(initValue[0], bool) and isinstance(initValue, (list, tuple)):
-            return PropBoolVector(*args, size=size, **kwargs)
-        elif initValue is bool:
-            return PropBoolVector(*args, size=size, **kwargs)
-        elif initValue is int:
-            return PropIntVector(*args, size=size, **kwargs)
-        elif initValue is float:
-            return PropFloatVector(*args, size=size, **kwargs)
-        else:
-            # TODO: dynamic collection class for type
-            return PropCollection(*args, **kwargs)
+    prop = None
+    if "Update" in kwargs.keys():
+        kwargs["update"] = kwargs.pop("Update")
+    if "Get" in kwargs.keys():
+        kwargs["get"] = kwargs.pop("Get")
+    if "default" in kwargs.keys():
+        default = kwargs["default"]
+        if initValue is None:
+            initValue = default
+        elif type(initValue) != type(default):
+            raise TypeError(f"initValue {type(initValue)=} != {type(default)=}")
+
+    try:
+        len_initValue = len(initValue)
+    except TypeError:
+        len_initValue = None
+    if size == None:
+        size = len_initValue
+
+    if isinstance(initValue, str):
+        is_iterable = False
     else:
+        is_iterable, initValue = iterable(initValue)
+    if isinstance(initValue, type) and issubclass(
+        initValue, (bpy.types.PropertyGroup, bpy.types.ID)
+    ):
+        kwargs["type"] = initValue
+        initValue = None
+    elif callable(initValue) or is_iterable:
+        Log.debug(f"peek {initValue=}, {is_iterable=}")
+        kwargs["items"] = initValue
+        initValue = None
+    if "type" in kwargs.keys():
+        if issubclass(kwargs["type"], bpy.types.ID):
+            prop = bpy.props.PointerProperty(**kwargs)
+        elif issubclass(kwargs["type"], bpy.types.PropertyGroup):
+            if size is None:
+                prop = bpy.props.PointerProperty(**kwargs)
+            elif isinstance(size, int) and size >= 0:
+                initValue = [None] * size
+                prop = bpy.props.CollectionProperty(**kwargs)
+            else:
+                raise ValueError(f"Invalid size for PropertyGroup: {size=}")
+    elif "items" in kwargs.keys():
+        prop = bpy.props.EnumProperty(**kwargs)
+    elif is_iterable and not isinstance(initValue, str):
+        if len_initValue != size:
+            raise ValueError(f"size of default {len_initValue=} != {size=}")
         if initValue is bool:
-            return PropBool(*args, **kwargs)
+            prop = bpy.props.BoolVectorProperty(size=size, **kwargs)
         elif initValue is int:
-            return PropInt(*args, **kwargs)
+            prop = bpy.props.IntVectorProperty(size=size, **kwargs)
         elif initValue is float:
-            return PropFloat(*args, **kwargs)
+            prop = bpy.props.FloatVectorProperty(size=size, **kwargs)
+        else:
+            init_0, initValue = peek_iter(initValue)
+            if isinstance(init_0, bool):
+                prop = bpy.props.BoolVectorProperty(size=size, **kwargs)
+            elif isinstance(init_0, int):
+                prop = bpy.props.IntVectorProperty(size=size, **kwargs)
+            elif isinstance(init_0, float):
+                prop = bpy.props.FloatVectorProperty(size=size, **kwargs)
+            else:
+                # TODO: dynamic collection class for type
+                prop = bpy.props.CollectionProperty(**kwargs)
+    else:
+        if isinstance(initValue, bool):
+            prop = bpy.props.BoolProperty(**kwargs)
+        elif isinstance(initValue, int):
+            prop = bpy.props.IntProperty(**kwargs)
+        elif isinstance(initValue, float):
+            prop = bpy.props.FloatProperty(**kwargs)
+        elif isinstance(initValue, str):
+            prop = bpy.props.StringProperty(**kwargs)
+        elif initValue is bool:
+            prop = bpy.props.BoolProperty(**kwargs)
+        elif initValue is int:
+            prop = bpy.props.IntProperty(**kwargs)
+        elif initValue is float:
+            prop = bpy.props.FloatProperty(**kwargs)
         elif initValue is str:
-            return PropStr(*args, **kwargs)
+            prop = bpy.props.StringProperty(**kwargs)
+        # elif "enum" in initValue.__class__.__name__.lower():
+        #     prop = partial(bpy.props.EnumProperty, **kwargs)
+        else:
+            raise ValueError(f"Unsupported initValue type: {type(initValue)}")
+    return prop, initValue
