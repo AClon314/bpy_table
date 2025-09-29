@@ -13,7 +13,7 @@ import functools
 from datetime import datetime
 from typing import Sequence
 from .typo import *
-from .typo import _TV, _PropBase, _PropDUGS
+from .typo import _TV
 
 __version__ = (
     datetime.fromtimestamp(os.path.getmtime(__file__))
@@ -123,7 +123,7 @@ class Var(Generic[_TV]):
 
     Args:
         default : the default value, that will restore when hit `backspace` key on UI property field.
-        initValue : the initial value, that only set **ONCE** when register the property, compared to `default`
+        value : the initial value, that only set **ONCE** when register the property, compared to `default`
         name : the property name in blender RNA system, must be
             - not startwith `_`
             - name.isidentifier(), comply python variable naming rules
@@ -149,10 +149,10 @@ class Var(Generic[_TV]):
     @property
     def prop(self):
         """Generate an instance of _DeferredProperty, used for mounted on bpy.types.*.*"""
-        prop, initValue = PropDeferred(
-            initValue=self.initValue, size=self.size, **self.kwargs
+        prop, initValue = DeferredProp(
+            value=self.initValue, size=self.size, **self.kwargs
         )
-        self.initValue = initValue
+        self.value = initValue
         return prop
 
     def draw(self, layout: bpy.types.UILayout, **kwargs):
@@ -160,8 +160,8 @@ class Var(Generic[_TV]):
 
     def reg(self, at: TypesTypes | None = None):
         if at is None:
-            Log.debug(f"{at=}, Var.reg() use {self.reg_at=}")
-            at = self.reg_at
+            Log.debug(f"{at=}, Var.reg() use {self.regAt=}")
+            at = self.regAt
         if hasattr(at, self.varname):
             Log.error(f"Property {self.varname} already exists {at=}")
             return self
@@ -169,15 +169,15 @@ class Var(Generic[_TV]):
         setattr(at, self.varname, prop)
         _prop = prop_cls(bpy.context, at.__name__.lower(), self.varname, self=self)
         setattr(GlobalVar, self.varname, _prop)
-        if self.initValue:
-            self.value = self.initValue
+        if self.value:
+            self.value = self.value
         Log.debug(f"reg {self.varname}{prop} {at=}")
         return self
 
     def unreg(self, at: TypesTypes | None = None):
         if at is None:
-            Log.debug(f"{at=}, Var.unreg() use {self.reg_at=}")
-            at = self.reg_at
+            Log.debug(f"{at=}, Var.unreg() use {self.regAt=}")
+            at = self.regAt
         if hasattr(at, self.varname):
             delattr(at, self.varname)
             delattr(bq.var, self.varname)
@@ -190,7 +190,7 @@ class Var(Generic[_TV]):
     @overload
     def __init__(
         self: "Var[bool]",
-        initValue: bool | type[bool],
+        value: bool | type[bool],
         *,
         varname="",
         reg: TypesTypes | None = bpy.types.Scene,
@@ -200,7 +200,7 @@ class Var(Generic[_TV]):
     @overload
     def __init__(
         self: "Var[int]",
-        initValue: int | type[int],
+        value: int | type[int],
         *,
         varname="",
         reg: TypesTypes | None = bpy.types.Scene,
@@ -210,7 +210,7 @@ class Var(Generic[_TV]):
     @overload
     def __init__(
         self: "Var[float]",
-        initValue: float | type[float],
+        value: float | type[float],
         *,
         varname="",
         reg: TypesTypes | None = bpy.types.Scene,
@@ -220,7 +220,7 @@ class Var(Generic[_TV]):
     @overload
     def __init__(
         self: "Var[str]",
-        initValue: str | type[str],
+        value: str | type[str],
         *,
         varname="",
         reg: TypesTypes | None = bpy.types.Scene,
@@ -230,7 +230,7 @@ class Var(Generic[_TV]):
     @overload
     def __init__(
         self: "Var[Iterable[bool]]",
-        initValue: Iterable[bool] | type[bool],
+        value: Iterable[bool] | type[bool],
         *,
         size: int | None = None,
         varname="",
@@ -241,7 +241,7 @@ class Var(Generic[_TV]):
     @overload
     def __init__(
         self: "Var[Iterable[int]]",
-        initValue: Iterable[int] | type[int],
+        value: Iterable[int] | type[int],
         *,
         size: int | None = None,
         varname="",
@@ -252,7 +252,7 @@ class Var(Generic[_TV]):
     @overload
     def __init__(
         self: "Var[Iterable[float]]",
-        initValue: Iterable[float] | type[float],
+        value: Iterable[float] | type[float],
         *,
         size: int | None = None,
         varname="",
@@ -288,19 +288,26 @@ class Var(Generic[_TV]):
     def __init__(
         self,
         items: (
-            Iterable[tuple[_TV, str, str]]
+            Iterable[tuple[str, str, str]]
             | Callable[
                 [bpy.types.bpy_struct, bpy.types.Context | None],
-                Iterable[tuple[_TV, str, str]],
+                Iterable[tuple[str, str, str]],
             ]
         ),
         /,
         *,
         varname="",
         reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[_PropDUGS[_TV]],
+        **kwargs: Unpack[_PropDUGS[str]],
     ):
-        """EnumProperty"""
+        """EnumProperty
+        
+        Args:
+            items (Iterable[identifier, name, description] or function(self, context) -> Iterable[identifier, name, description]):
+                full: [(identifier, name, description, icon, number), ...]
+                > There is a known bug with using a callback, Python must keep a reference to the strings returned by the callback or Blender will misbehave or even crash.
+                使用回调存在一个已知的错误，Python 必须保留对回调返回的字符串的引用，否则 Blender 会行为异常甚至崩溃。
+        """
 
     @overload
     def __init__(
@@ -317,7 +324,7 @@ class Var(Generic[_TV]):
 
     def __init__(
         self,
-        initValue: Any = None,
+        value: Any = None,
         *,
         size: int | None = None,
         varname="",
@@ -336,14 +343,14 @@ class Var(Generic[_TV]):
                 f"Invalid property {varname=}, must not startwith _ and comply python variable naming rules"
             )
         self.varname = varname
-        self.initValue = initValue
+        self.initValue = value
         self.size = size
         self.kwargs = kwargs
         self._obj_attr_ = (self, ())
         Log.debug(f"__init__ {self.__dict__=}")
         if reg:
-            self.reg_at = reg
-            self.reg(self.reg_at)
+            self.regAt = reg
+            self.reg(self.regAt)
 
 
 def is_bpy_prop(instance: object, *clsName: str):
@@ -428,7 +435,7 @@ class GlobalVar:
     @overload
     def __call__(
         self,
-        initValue: bool | type[bool],
+        value: bool | type[bool],
         *,
         reg: TypesTypes | None = bpy.types.Scene,
         **kwargs: Unpack[PropBool],
@@ -437,7 +444,7 @@ class GlobalVar:
     @overload
     def __call__(
         self,
-        initValue: int | type[int],
+        value: int | type[int],
         *,
         reg: TypesTypes | None = bpy.types.Scene,
         **kwargs: Unpack[PropInt],
@@ -446,7 +453,7 @@ class GlobalVar:
     @overload
     def __call__(
         self,
-        initValue: float | type[float],
+        value: float | type[float],
         *,
         reg: TypesTypes | None = bpy.types.Scene,
         **kwargs: Unpack[PropFloat],
@@ -455,7 +462,7 @@ class GlobalVar:
     @overload
     def __call__(
         self,
-        initValue: str | type[str],
+        value: str | type[str],
         *,
         reg: TypesTypes | None = bpy.types.Scene,
         **kwargs: Unpack[PropStr],
@@ -464,7 +471,7 @@ class GlobalVar:
     @overload
     def __call__(
         self,
-        initValue: Iterable[bool] | type[bool],
+        value: Iterable[bool] | type[bool],
         *,
         size: int | None = None,
         reg: TypesTypes | None = bpy.types.Scene,
@@ -474,7 +481,7 @@ class GlobalVar:
     @overload
     def __call__(
         self,
-        initValue: Iterable[int] | type[int],
+        value: Iterable[int] | type[int],
         *,
         size: int | None = None,
         reg: TypesTypes | None = bpy.types.Scene,
@@ -484,7 +491,7 @@ class GlobalVar:
     @overload
     def __call__(
         self,
-        initValue: Iterable[float] | type[float],
+        value: Iterable[float] | type[float],
         *,
         size: int | None = None,
         reg: TypesTypes | None = bpy.types.Scene,
@@ -548,7 +555,7 @@ class GlobalVar:
 
     def __call__(
         self,
-        initValue: Any = None,
+        value: Any = None,
         *,
         size: int | None = None,
         varname="",
@@ -558,7 +565,7 @@ class GlobalVar:
         """see Var()"""
         if not varname:
             varname = get_varname()
-        return Var(initValue, size=size, varname=varname, reg=reg, **kwargs)
+        return Var(value, size=size, varname=varname, reg=reg, **kwargs)
 
 
 class bpq(ContextData):
@@ -641,10 +648,13 @@ class bpq(ContextData):
         return cls
 
     @staticmethod
-    def draw(layout: bpy.types.UILayout, data: "Var", **kwargs):
-        """Draw the UI elements"""
-        # TODO
-        layout.prop(bpq.scene, "name", **kwargs)
+    def draw(layout: bpy.types.UILayout, var: Var, **kwargs: Unpack[LayoutProp]):
+        """Draw the UI elements. Equal to:
+        ```python
+        layout.prop(bpy.context.scene, var.varname, **kwargs)
+        ```
+        """
+        return layout.prop(var.regAt, var.varname, **kwargs)
 
     @staticmethod
     def hook():
