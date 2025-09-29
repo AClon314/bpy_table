@@ -149,10 +149,8 @@ class Var(Generic[_TV]):
     @property
     def prop(self):
         """Generate an instance of _DeferredProperty, used for mounted on bpy.types.*.*"""
-        prop, initValue = DeferredProp(
-            value=self.initValue, size=self.size, **self.kwargs
-        )
-        self.value = initValue
+        prop, initValue = DeferredProp(self.initValue, size=self.size, **self.kwargs)
+        self.initValue = initValue
         return prop
 
     def draw(self, layout: bpy.types.UILayout, **kwargs):
@@ -189,42 +187,22 @@ class Var(Generic[_TV]):
 
     @overload
     def __init__(
-        self: "Var[bool]",
-        value: bool | type[bool],
-        *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropBool],
+        self: "Var[bool]", value: bool | type[bool], **kwargs: Unpack[KwBoolProp]
     ): ...
 
     @overload
     def __init__(
-        self: "Var[int]",
-        value: int | type[int],
-        *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropInt],
+        self: "Var[int]", value: int | type[int], **kwargs: Unpack[KwIntProp]
     ): ...
 
     @overload
     def __init__(
-        self: "Var[float]",
-        value: float | type[float],
-        *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropFloat],
+        self: "Var[float]", value: float | type[float], **kwargs: Unpack[KwFloatProp]
     ): ...
 
     @overload
     def __init__(
-        self: "Var[str]",
-        value: str | type[str],
-        *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropStr],
+        self: "Var[str]", value: str | type[str], **kwargs: Unpack[KwStrProp]
     ): ...
 
     @overload
@@ -233,9 +211,7 @@ class Var(Generic[_TV]):
         value: Iterable[bool] | type[bool],
         *,
         size: int | None = None,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropBool],
+        **kwargs: Unpack[KwBoolProp],
     ): ...
 
     @overload
@@ -244,9 +220,7 @@ class Var(Generic[_TV]):
         value: Iterable[int] | type[int],
         *,
         size: int | None = None,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropInt],
+        **kwargs: Unpack[KwIntProp],
     ): ...
 
     @overload
@@ -255,20 +229,17 @@ class Var(Generic[_TV]):
         value: Iterable[float] | type[float],
         *,
         size: int | None = None,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropFloat],
+        **kwargs: Unpack[KwFloatProp],
     ): ...
 
     @overload
     def __init__(
         self: "Var[_TV_PROP_GROUP]",
-        type: type[_TV_PROP_GROUP],
+        type: type[_TV_PROP_GROUP] | None = None,
         /,
         *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropPointer],
+        value: Sequence[Sequence] | None = None,
+        **kwargs: Unpack[KwPointerProp],
     ):
         """PointerProperty of PropertyGroup"""
 
@@ -277,10 +248,8 @@ class Var(Generic[_TV]):
         self: "Var[_TV_ID]",
         type: type[_TV_ID],
         /,
-        *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropPointer],
+        # value: Sequence[Sequence] | None = None,
+        **kwargs: Unpack[KwPointerProp],
     ):
         """PointerProperty of bpy.types.ID type"""
 
@@ -295,13 +264,10 @@ class Var(Generic[_TV]):
             ]
         ),
         /,
-        *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[_PropDUGS[str]],
+        **kwargs: Unpack[KwEnumProp],
     ):
         """EnumProperty
-        
+
         Args:
             items (Iterable[identifier, name, description] or function(self, context) -> Iterable[identifier, name, description]):
                 full: [(identifier, name, description, icon, number), ...]
@@ -316,12 +282,11 @@ class Var(Generic[_TV]):
         /,
         *,
         size: int | None = None,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[_PropBase],
+        **kwargs: Unpack[KwCollectionProp],
     ):
         """CollectionProperty"""
 
+    # ⭐⭐⭐⭐⭐
     def __init__(
         self,
         value: Any = None,
@@ -434,39 +399,23 @@ class GlobalVar:
 
     @overload
     def __call__(
-        self,
-        value: bool | type[bool],
-        *,
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropBool],
-    ) -> Var[bool]: ...
+        self, value: bool | type[bool], **kwargs: Unpack[KwBoolProp]
+    ) -> "Var[bool]": ...
 
     @overload
     def __call__(
-        self,
-        value: int | type[int],
-        *,
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropInt],
-    ) -> Var[int]: ...
+        self, value: int | type[int], **kwargs: Unpack[KwIntProp]
+    ) -> "Var[int]": ...
 
     @overload
     def __call__(
-        self,
-        value: float | type[float],
-        *,
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropFloat],
-    ) -> Var[float]: ...
+        self, value: float | type[float], **kwargs: Unpack[KwFloatProp]
+    ) -> "Var[float]": ...
 
     @overload
     def __call__(
-        self,
-        value: str | type[str],
-        *,
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropStr],
-    ) -> Var[str]: ...
+        self, value: str | type[str], **kwargs: Unpack[KwStrProp]
+    ) -> "Var[str]": ...
 
     @overload
     def __call__(
@@ -474,9 +423,8 @@ class GlobalVar:
         value: Iterable[bool] | type[bool],
         *,
         size: int | None = None,
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropBool],
-    ) -> Var[Iterable[bool]]: ...
+        **kwargs: Unpack[KwBoolProp],
+    ) -> "Var[Iterable[bool]]": ...
 
     @overload
     def __call__(
@@ -484,9 +432,8 @@ class GlobalVar:
         value: Iterable[int] | type[int],
         *,
         size: int | None = None,
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropInt],
-    ) -> Var[Iterable[int]]: ...
+        **kwargs: Unpack[KwIntProp],
+    ) -> "Var[Iterable[int]]": ...
 
     @overload
     def __call__(
@@ -494,65 +441,64 @@ class GlobalVar:
         value: Iterable[float] | type[float],
         *,
         size: int | None = None,
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropFloat],
-    ) -> Var[Iterable[float]]: ...
+        **kwargs: Unpack[KwFloatProp],
+    ) -> "Var[Iterable[float]]": ...
 
     @overload
     def __call__(
-        self: "Var[_TV_PROP_GROUP]",
-        type: type[_TV_PROP_GROUP],
+        self,
+        type: type[_TV_PROP_GROUP] | None = None,
         /,
         *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropPointer],
-    ):
+        value: Sequence[Sequence] | None = None,
+        **kwargs: Unpack[KwPointerProp],
+    ) -> "Var[_TV_PROP_GROUP]":
         """PointerProperty of PropertyGroup"""
 
     @overload
     def __call__(
-        self: "Var[_TV_ID]",
+        self,
         type: type[_TV_ID],
         /,
-        *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[PropPointer],
-    ):
+        # value: Sequence[Sequence] | None = None,
+        **kwargs: Unpack[KwPointerProp],
+    ) -> "Var[_TV_ID]":
         """PointerProperty of bpy.types.ID type"""
 
     @overload
     def __call__(
         self,
         items: (
-            Iterable[tuple[_TV, str, str]]
+            Iterable[tuple[str, str, str]]
             | Callable[
                 [bpy.types.bpy_struct, bpy.types.Context | None],
-                Iterable[tuple[_TV, str, str]],
+                Iterable[tuple[str, str, str]],
             ]
         ),
         /,
-        *,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[_PropDUGS[_TV]],
+        **kwargs: Unpack[KwEnumProp],
     ):
-        """EnumProperty"""
+        """EnumProperty
+
+        Args:
+            items (Iterable[identifier, name, description] or function(self, context) -> Iterable[identifier, name, description]):
+                full: [(identifier, name, description, icon, number), ...]
+                > There is a known bug with using a callback, Python must keep a reference to the strings returned by the callback or Blender will misbehave or even crash.
+                使用回调存在一个已知的错误，Python 必须保留对回调返回的字符串的引用，否则 Blender 会行为异常甚至崩溃。
+        """
 
     @overload
     def __call__(
-        self: "Var[CollectionProperty[_TV_PROP_GROUP]]",
+        self,
         type: type[_TV_PROP_GROUP],
         /,
         *,
         size: int | None = None,
-        varname="",
-        reg: TypesTypes | None = bpy.types.Scene,
-        **kwargs: Unpack[_PropBase],
-    ):
+        **kwargs: Unpack[KwCollectionProp],
+    ) -> "Var[CollectionProperty[_TV_PROP_GROUP]]":
         """CollectionProperty"""
 
+    # ⭐⭐⭐⭐⭐
     def __call__(
         self,
         value: Any = None,

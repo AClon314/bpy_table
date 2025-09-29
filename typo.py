@@ -3,8 +3,14 @@
 import bpy
 import logging
 import itertools
+import functools
 from typing import *  # type: ignore
-import bpy.stub_internal.rna_enums as rna_enums
+
+try:
+    import bpy.stub_internal.rna_enums as rna_enums
+except ImportError:
+    ...
+
 
 def getLogger(name=__name__):
     _log_handler = logging.StreamHandler()
@@ -351,7 +357,7 @@ def peek_iter(iterable: Iterable[_TV]):
 
 
 def iterable(obj):
-    """return (is_iterable, obj)"""
+    """return (is_iterable, obj), only EnumProp use Iterable, else use Sequence."""
     try:
         init_0, obj = peek_iter(obj)
         return True, obj
@@ -364,8 +370,8 @@ def copyArgs(
 ) -> Callable[[Callable[..., _TV]], Callable[_PS, _TV]]:
     """https://dev59.com/NnMOtIcB2Jgan1znX5jv"""
 
-    def return_func(to: Callable[..., _TV]) -> Callable[_PS, _TV]:
-        return cast(Callable[_PS, _TV], to)
+    def return_func(decorated: Callable[..., _TV]) -> Callable[_PS, _TV]:
+        return cast(Callable[_PS, _TV], decorated)
 
     return return_func
 
@@ -373,10 +379,19 @@ def copyArgs(
 def prependArg(
     From: Callable[_PS, Any], value: type[_TV1], TYPE: _TV1
 ) -> Callable[[Callable[..., _TV]], Callable[Concatenate[_TV1, _PS], _TV]]:
-    def return_func(to: Callable[..., _TV]):
-        return cast(Callable[Concatenate[_TV1, _PS], _TV], to)
+    def return_func(decorated: Callable[..., _TV]):
+        return cast(Callable[Concatenate[_TV1, _PS], _TV], decorated)
 
     return return_func
+
+
+def copyInitArg(
+    From: Callable[Concatenate[_TV, _PS], None],
+) -> Callable[[Callable[..., _TV]], Callable[Concatenate[Any, _PS], _TV]]:
+    def decorator(func: Callable[..., _TV]) -> Callable[Concatenate[Any, _PS], _TV]:
+        return cast(Callable[Concatenate[Any, _PS], _TV], func)
+
+    return decorator
 
 
 @overload
@@ -424,25 +439,126 @@ def DeferredProp(*a, **kw): ...
 def DeferredProp(*a, **kw): ...
 
 
-class KwCollectionProp(TypedDict, total=False):
+class KwProp(TypedDict, total=False):
+    """len(kwargs)=5. Total 10 kinds of bpy.props"""
+
+    varname: str
+    """bq.var"""
+    reg: TypesTypes | None
+    """default bpy.types.Scene, bpq.var"""
+
     name: str
-    description : str
-    translation_context : str
-    '''https://docs.blender.org/api/current/bpy.app.translations.html#bpy.app.translations.contexts'''
-    options: rna_enums.PropertyFlagEnumItems
-    '''https://docs.blender.org/api/current/bpy_types_enum_items/property_flag_items.html#rna-enum-property-flag-items'''
-    override: rna_enums.PropertyOverrideFlagCollectionItems
-    '''https://docs.blender.org/api/current/bpy_types_enum_items/property_override_flag_collection_items.html#rna-enum-property-override-flag-collection-items'''
+    description: str
+    translation_context: str
+    """https://docs.blender.org/api/current/bpy.app.translations.html#bpy.app.translations.contexts"""
+    options: "rna_enums.PropertyFlagItems"
+    """https://docs.blender.org/api/current/bpy_types_enum_items/property_flag_items.html#rna-enum-property-flag-items"""
     tags: set[str]
-    '''Enum of tags that are defined by parent class.'''
+    """Enum of tags that are defined by parent class."""
+
+
+SELF_CONTEXT = Callable[[bpy.types.bpy_struct, bpy.types.Context], None]
+
+
+class KwPointerProp(KwProp, total=False):
+    """⭐len(kwargs):9 , bpy.types.* = bpy.props.PointerProperty(type=PropertyGroup)"""
+
+    # type: type[bpy.types.ID | bpy.types.PropertyGroup]
+    override: "rna_enums.PropertyOverrideFlagItems"
+    poll: Callable[[bpy.types.bpy_struct, bpy.types.ID], bool]
+    update: SELF_CONTEXT
+
+
+class KwDOUGS(Generic[_TV], KwProp, total=False):
+    """len(args)=10"""
+
+    default: _TV
+    override: "rna_enums.PropertyOverrideFlagItems"
+    """https://docs.blender.org/api/current/bpy_types_enum_items/property_override_flag_items.html#rna-enum-property-override-flag-items"""
+    Update: SELF_CONTEXT
+    Get: Callable[[bpy.types.bpy_struct], _TV]
+    set: Callable[[bpy.types.bpy_struct, _TV], None]
+
+
+class KwEnumProp(KwProp, total=False):
+    """⭐len(args)=11"""
+
+    items: (
+        Iterable[tuple[str, str, str]]
+        | Callable[
+            [bpy.types.bpy_struct, bpy.types.Context | None],
+            Iterable[tuple[str, str, str]],
+        ]
+    )
+    default: str | int | set[str]
+    """The default value for this enum, a string from the identifiers used in items, or integer matching an item number. If the ENUM_FLAG option is used this must be a set of such string identifiers instead.
+
+    ⚠️WARNING: Strings cannot be specified for dynamic enums (i.e. if a callback function is given as items parameter)."""
+    override: "rna_enums.PropertyOverrideFlagItems"
+    """https://docs.blender.org/api/current/bpy_types_enum_items/property_override_flag_items.html#rna-enum-property-override-flag-items"""
+    update: SELF_CONTEXT
+    get: Callable[[bpy.types.bpy_struct], int]
+    set: Callable[[bpy.types.bpy_struct, int], None]
+
+
+class KwBoolProp(KwDOUGS[bool], total=False):
+    """⭐len(args)=11"""
+
+    subtype: "rna_enums.PropertySubtypeNumberItems"
+
+
+class KwNum(TypedDict, total=False):
+    """len(args)=5"""
+
+    min: int | float
+    max: int | float
+    soft_min: int | float
+    soft_max: int | float
+    step: int
+    """1~100, default 3. will ÷ 100, so default is 0.03"""
+
+
+class KwIntProp(KwNum, KwDOUGS[int], total=False):
+    """⭐len(args)=16"""
+
+    subtype: "rna_enums.PropertySubtypeNumberItems"
+
+
+class KwFloatProp(KwNum, KwDOUGS[float], total=False):
+    """⭐len(args)=18"""
+
+    precision: int
+    """0~6, default 3"""
+    subtype: "rna_enums.PropertySubtypeNumberItems"
+    unit: "rna_enums.PropertyUnitItems"
+
+
+class KwStrProp(KwDOUGS, total=False):
+    """⭐len(args)=14"""
+
+    maxlen: int
+    """default 0"""
+    subtype: "rna_enums.PropertySubtypeStringItems"
+    search: Callable[
+        [bpy.types.bpy_struct, bpy.types.Context, str], Iterable[str | tuple[str, str]]
+    ]
+    search_options: "rna_enums.PropertyStringSearchFlagItems"
+
+
+class KwCollectionProp(KwProp, total=False):
+    """⭐len(kwargs):6 + type_arg:1 = 7"""
+
+    override: "rna_enums.PropertyOverrideFlagCollectionItems"
+    """https://docs.blender.org/api/current/bpy_types_enum_items/property_override_flag_collection_items.html#rna-enum-property-override-flag-collection-items"""
+
 
 @overload
 def DeferredProp(
-    type: type[bpy.types.PropertyGroup]|None=None,
-    value: Sequence[Sequence]|None=None, # TODO: dynamic gen collection class
+    type: type[bpy.types.PropertyGroup] | None = None,
+    value: Sequence[Sequence] | None = None,  # TODO: dynamic gen collection class
     *,
     size: int | None = None,
-    **kw:Unpack[KwCollectionProp],
+    **kw: Unpack[KwCollectionProp],
 ): ...
 
 
@@ -461,7 +577,7 @@ def DeferredProp(value: Any = None, **kwargs):
             - 0: dynamic length collection
             - negative: dynamic length collection, filled with abs(size) default values initially
         **kwargs: passed to `bpy.props.*Property()`
-        
+
     Usage:
     - Prop(0) : int
     - Prop(int) : int
@@ -560,3 +676,23 @@ def DeferredProp(value: Any = None, **kwargs):
         else:
             raise ValueError(f"Unsupported value type: {type(value)}")
     return prop, value
+
+
+class LayoutProp(TypedDict, total=False):
+    """len(kwargs)=5"""
+
+    text: str
+    text_ctxt: str
+    translate: bool
+    icon: "rna_enums.IconItems"
+    placeholder: str
+    expand: bool
+    slider: bool
+    toggle: int
+    icon_only: bool
+    event: bool
+    full_event: bool
+    emboss: bool
+    index: int
+    icon_value: int
+    invert_checkbox: bool
