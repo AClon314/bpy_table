@@ -153,7 +153,8 @@ class Var(Generic[_TV]):
         self.initValue = initValue
         return prop
 
-    def draw(self, layout: bpy.types.UILayout, **kwargs):
+    def draw(self, layout: bpy.types.UILayout, **kwargs: Unpack[LayoutProp]):
+        """see bpq.draw()"""
         bpq.draw(layout, self, **kwargs)
 
     def reg(self, at: TypesTypes | None = None):
@@ -256,13 +257,7 @@ class Var(Generic[_TV]):
     @overload
     def __init__(
         self,
-        items: (
-            Iterable[tuple[str, str, str]]
-            | Callable[
-                [bpy.types.bpy_struct, bpy.types.Context | None],
-                Iterable[tuple[str, str, str]],
-            ]
-        ),
+        items: ENUM_ITEMS,
         /,
         **kwargs: Unpack[KwEnumProp],
     ):
@@ -468,13 +463,7 @@ class GlobalVar:
     @overload
     def __call__(
         self,
-        items: (
-            Iterable[tuple[str, str, str]]
-            | Callable[
-                [bpy.types.bpy_struct, bpy.types.Context | None],
-                Iterable[tuple[str, str, str]],
-            ]
-        ),
+        items: ENUM_ITEMS,
         /,
         **kwargs: Unpack[KwEnumProp],
     ):
@@ -599,6 +588,8 @@ class bpq(ContextData):
         ```python
         layout.prop(bpy.context.scene, var.varname, **kwargs)
         ```
+
+        https://docs.blender.org/api/current/bpy.types.UILayout.html#bpy.types.UILayout.prop
         """
         return layout.prop(var.regAt, var.varname, **kwargs)
 

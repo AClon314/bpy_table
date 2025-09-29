@@ -480,16 +480,28 @@ class KwDOUGS(Generic[_TV], KwProp, total=False):
     set: Callable[[bpy.types.bpy_struct, _TV], None]
 
 
+ENUM_ITEMS = Iterable[
+    tuple[str, str, str]
+    | tuple[str, str, str, int]
+    | tuple[str, str, str, str, int]
+    | None
+] | (
+    Callable[
+        [Any, bpy.types.Context | None],
+        Iterable[
+            tuple[str, str, str]
+            | tuple[str, str, str, int]
+            | tuple[str, str, str, str, int]
+            | None
+        ],
+    ]
+)
+
+
 class KwEnumProp(KwProp, total=False):
     """⭐len(args)=11"""
 
-    items: (
-        Iterable[tuple[str, str, str]]
-        | Callable[
-            [bpy.types.bpy_struct, bpy.types.Context | None],
-            Iterable[tuple[str, str, str]],
-        ]
-    )
+    items: ENUM_ITEMS
     default: str | int | set[str]
     """The default value for this enum, a string from the identifiers used in items, or integer matching an item number. If the ENUM_FLAG option is used this must be a set of such string identifiers instead.
 
@@ -679,20 +691,32 @@ def DeferredProp(value: Any = None, **kwargs):
 
 
 class LayoutProp(TypedDict, total=False):
-    """len(kwargs)=5"""
+    """len(kwargs)=5."""
 
     text: str
     text_ctxt: str
+    """https://docs.blender.org/api/current/bpy.app.translations.html#bpy.app.translations.contexts"""
     translate: bool
     icon: "rna_enums.IconItems"
+    """https://docs.blender.org/api/current/bpy_types_enum_items/icon_items.html#rna-enum-icon-items"""
     placeholder: str
+    """hint when empty"""
     expand: bool
+    """Expand button to show more detail"""
     slider: bool
+    """Use slider widget for numeric values"""
     toggle: int
+    """(int in [-1, 1], (optional)) – Use toggle widget for boolean values, or a checkbox when disabled (the default is -1 which uses toggle only when an icon is displayed)"""
     icon_only: bool
     event: bool
+    """Use button to input key events"""
     full_event: bool
+    """Use button to input full events including modifiers"""
     emboss: bool
+    """⭐ if False, only draw the icon/text without button style, corresponds to the `NONE_OR_STATUS` layout emboss type."""
     index: int
+    """ (int in [-2, inf], (optional)) – The index of this button, when set a single member of an array can be accessed, when set to -1 all array members are used"""
     icon_value: int
+    """(int in [0, inf], (optional)) – Icon Value, Override automatic icon of the item"""
     invert_checkbox: bool
+    """Draw checkbox value inverted"""
